@@ -5,36 +5,27 @@ struct QuickAddView: View {
     @State private var taskText: String = ""
     @State private var lists: [EKCalendar] = []
     
-    // 🚨 NEW: Focus State to auto-jump the cursor
     @FocusState private var isInputFocused: Bool
     
-    // Intelligence State
     @State private var parsedDate: Date? = nil
     @State private var parsedDateString: String? = nil
     @State private var parsedList: EKCalendar? = nil
     @State private var parsedListString: String? = nil
-    
-    // Priority State
-    @State private var parsedPriority: Int = 0 // 0=None, 1=High, 5=Medium, 9=Low
+    @State private var parsedPriority: Int = 0
     @State private var parsedPriorityString: String? = nil
     
     let eventStore = EKEventStore()
 
-    // 🚨 NEW: The fluid "Liquid Glass" animation transition
     let glassTransition = AnyTransition.asymmetric(
-        insertion: .scale(scale: 0.8, anchor: .trailing)
-            .combined(with: .move(edge: .trailing))
-            .combined(with: .opacity),
+        insertion: .scale(scale: 0.8, anchor: .trailing).combined(with: .move(edge: .trailing)).combined(with: .opacity),
         removal: .scale(scale: 0.8).combined(with: .opacity)
     )
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            
-            // 1. THE SMART TEXT FIELD
             ZStack(alignment: .leading) {
                 if taskText.isEmpty {
-                    Text("Task (e.g., '!!! Gym tomorrow in Personal')")
+                    Text("Task (e.g., '!!! Gym at 5pm in Personal')")
                         .font(.system(size: 24, weight: .light, design: .rounded))
                         .foregroundColor(.gray.opacity(0.4))
                         .allowsHitTesting(false)
@@ -43,29 +34,21 @@ struct QuickAddView: View {
                 Text(styledText(from: taskText))
                     .font(.system(size: 24, weight: .light, design: .rounded))
                     .allowsHitTesting(false)
-                    // Fluid animation for the text overlay changing
-                    .animation(.spring(response: 0.3, dampingFraction: 0.7), value: taskText)
                 
                 TextField("", text: $taskText)
                     .textFieldStyle(.plain)
                     .font(.system(size: 24, weight: .light, design: .rounded))
                     .foregroundColor(.clear)
                     .tint(.blue)
-                    .focused($isInputFocused) // Auto-focus binding
+                    .focused($isInputFocused)
                     .onSubmit { saveTask() }
             }
-            .onChange(of: taskText) { _ in
-                // Trigger the parsing engine with a bouncy physics animation
-                withAnimation(.spring(response: 0.4, dampingFraction: 0.6, blendDuration: 0.5)) {
-                    parseText()
-                }
+            .onChange(of: taskText) { oldValue, newValue in
+                withAnimation(.easeInOut(duration: 0.2)) { parseText() }
             }
             
-            // 2. THE FLUID POP-UP UI (Chips)
             if parsedDate != nil || parsedList != nil || parsedPriority > 0 {
                 HStack(spacing: 12) {
-                    
-                    // Priority Chip (Red/Yellow/Blue)
                     if parsedPriority > 0 {
                         HStack(spacing: 4) {
                             Image(systemName: "exclamationmark.circle.fill")
@@ -79,8 +62,6 @@ struct QuickAddView: View {
                         .clipShape(Capsule())
                         .transition(glassTransition)
                     }
-                    
-                    // Date Chip (Orange)
                     if let date = parsedDate {
                         HStack(spacing: 4) {
                             Image(systemName: "clock.fill")
@@ -94,8 +75,6 @@ struct QuickAddView: View {
                         .clipShape(Capsule())
                         .transition(glassTransition)
                     }
-                    
-                    // List Chip (Purple)
                     if let list = parsedList {
                         HStack(spacing: 4) {
                             Image(systemName: "list.bullet")
@@ -110,6 +89,8 @@ struct QuickAddView: View {
                         .transition(glassTransition)
                     }
                 }
+                .animation(.spring(response: 0.3, dampingFraction: 0.6), value: parsedDate)
+                .animation(.spring(response: 0.3, dampingFraction: 0.6), value: parsedList)
             }
         }
         .padding(20)
@@ -117,31 +98,31 @@ struct QuickAddView: View {
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .onAppear {
             requestPermissionsAndFetchLists()
-            isInputFocused = true // Focus on first launch
-        }
-        // 🚨 NEW: Listen for the AppDelegate telling us the panel opened
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("PanelDidOpen"))) { _ in
             isInputFocused = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("PanelDidOpen"))) { _ in
+            isInputFocused = false
+            // 🚨 FIX: Slightly longer delay guarantees macOS is ready for focus
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                isInputFocused = true
+            }
         }
     }
     
-    // Helper for Priority Colors
     private func priorityColor() -> Color {
         if parsedPriority == 1 { return .red }
         if parsedPriority == 5 { return .yellow }
         return .blue
     }
     
-    // --- ENGINE: SYNTAX HIGHLIGHTER ---
     private func styledText(from text: String) -> AttributedString {
         var attrString = AttributedString(text)
         attrString.foregroundColor = .primary
         
-        // Fade Priority Marks
         if let pStr = parsedPriorityString, let range = attrString.range(of: pStr) {
-            attrString[range].foregroundColor = priorityColor().opacity(0.6)
+            attrString[range].foregroundColor = priorityColor().opacity(0.5)
         }
-        if let dateStr = parsedDateString, let range = attrString.range(of: dateStr) {
+        if let dateStr = parsedDateString, let range = attrString.range(of: dateStr, options: .caseInsensitive) {
             attrString[range].foregroundColor = .orange.opacity(0.4)
         }
         if let listStr = parsedListString, let range = attrString.range(of: listStr, options: .caseInsensitive) {
@@ -150,7 +131,6 @@ struct QuickAddView: View {
         return attrString
     }
     
-    // --- ENGINE: NATURAL LANGUAGE PARSER ---
     private func parseText() {
         parsedDate = nil; parsedDateString = nil
         parsedList = nil; parsedListString = nil
@@ -158,60 +138,58 @@ struct QuickAddView: View {
         
         guard !taskText.isEmpty else { return }
         
-        // 1. Scan for Priority (Must be at the very beginning)
-        if taskText.hasPrefix("!!!") {
-            parsedPriority = 1 // High
-            parsedPriorityString = "!!!"
-        } else if taskText.hasPrefix("!!") {
-            parsedPriority = 5 // Medium
-            parsedPriorityString = "!!"
-        } else if taskText.hasPrefix("!") {
-            parsedPriority = 9 // Low
-            parsedPriorityString = "!"
-        }
+        if taskText.hasPrefix("!!!") { parsedPriority = 1; parsedPriorityString = "!!!" }
+        else if taskText.hasPrefix("!!") { parsedPriority = 5; parsedPriorityString = "!!" }
+        else if taskText.hasPrefix("!") { parsedPriority = 9; parsedPriorityString = "!" }
         
-        // 2. Scan for List Names
         for list in lists {
-            let pattern = "\\b\\Q\(list.title)\\E\\b"
-            if let range = taskText.range(of: pattern, options: [.regularExpression, .caseInsensitive]) {
+            let pattern = "(?i)\\b(?:in|to)\\s+\\Q\(list.title)\\E\\b"
+            if let range = taskText.range(of: pattern, options: .regularExpression) {
                 parsedList = list
                 parsedListString = String(taskText[range])
                 break
             }
         }
         
-        // 3. Scan for Dates & Times
         if let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.date.rawValue) {
             let matches = detector.matches(in: taskText, options: [], range: NSRange(location: 0, length: taskText.utf16.count))
             if let match = matches.first, let date = match.date {
-                if let range = Range(match.range, in: taskText) {
-                    parsedDateString = String(taskText[range])
+                if let baseRange = Range(match.range, in: taskText) {
+                    var finalDateString = String(taskText[baseRange])
+                    let textBefore = taskText[taskText.startIndex..<baseRange.lowerBound]
+                    let wordsBefore = textBefore.components(separatedBy: .whitespaces)
+                    
+                    if let lastWord = wordsBefore.last(where: { !$0.isEmpty })?.lowercased(),
+                       ["at", "on", "by", "for", "due"].contains(lastWord) {
+                        let searchPattern = "(?i)\\b\(lastWord)\\s+\\Q\(finalDateString)\\E"
+                        if let fullRange = taskText.range(of: searchPattern, options: .regularExpression) {
+                            finalDateString = String(taskText[fullRange])
+                        }
+                    }
+                    parsedDateString = finalDateString
                     parsedDate = date
                 }
             }
         }
     }
     
-    // --- ENGINE: SAVE & CLEANUP ---
     private func saveTask() {
         guard !taskText.isEmpty else { return }
         var cleanTitle = taskText
         
         if let pStr = parsedPriorityString { cleanTitle = cleanTitle.replacingOccurrences(of: pStr, with: "") }
         if let dStr = parsedDateString { cleanTitle = cleanTitle.replacingOccurrences(of: dStr, with: "", options: .caseInsensitive) }
-        if let lStr = parsedListString {
-            cleanTitle = cleanTitle.replacingOccurrences(of: lStr, with: "", options: .caseInsensitive)
-            cleanTitle = cleanTitle.replacingOccurrences(of: " in ", with: " ")
-            cleanTitle = cleanTitle.replacingOccurrences(of: " to ", with: " ")
-        }
+        if let lStr = parsedListString { cleanTitle = cleanTitle.replacingOccurrences(of: lStr, with: "", options: .caseInsensitive) }
         
         cleanTitle = cleanTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         if cleanTitle.isEmpty { cleanTitle = "New Task" }
         
+        let destinationList = parsedList ?? eventStore.defaultCalendarForNewReminders()
+        
         let reminder = EKReminder(eventStore: eventStore)
         reminder.title = cleanTitle
-        reminder.calendar = parsedList ?? eventStore.defaultCalendarForNewReminders()
-        reminder.priority = parsedPriority // Set the priority in EventKit!
+        if let dest = destinationList { reminder.calendar = dest }
+        reminder.priority = parsedPriority
         
         if let targetDate = parsedDate {
             reminder.dueDateComponents = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: targetDate)
@@ -220,12 +198,30 @@ struct QuickAddView: View {
         
         try? eventStore.save(reminder, commit: true)
         
+        let finalTitle = cleanTitle
+        let finalListTitle = destinationList?.title ?? "Reminders"
+        
+        var finalDateFormatted: String? = nil
+        if let d = parsedDate {
+            let formatter = DateFormatter()
+            formatter.dateStyle = .short
+            formatter.timeStyle = .short
+            finalDateFormatted = formatter.string(from: d)
+        }
+        
         taskText = ""
         parseText()
         
-        if let appDelegate = NSApp.delegate as? AppDelegate {
-            appDelegate.hidePanel()
-        }
+        // 🚨 FIX: Broadcast the data payload safely instead of trying to cast to AppDelegate
+        NotificationCenter.default.post(
+            name: NSNotification.Name("TaskSaved"),
+            object: nil,
+            userInfo: [
+                "title": finalTitle,
+                "list": finalListTitle,
+                "date": finalDateFormatted ?? ""
+            ]
+        )
     }
     
     private func requestPermissionsAndFetchLists() {
@@ -239,6 +235,7 @@ struct QuickAddView: View {
     }
 }
 
+// macOS native blur material structure
 struct VisualEffectView: NSViewRepresentable {
     func makeNSView(context: Context) -> NSVisualEffectView {
         let view = NSVisualEffectView()
