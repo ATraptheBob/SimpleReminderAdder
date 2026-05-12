@@ -14,6 +14,9 @@ struct QuickAddView: View {
     @State private var parsedPriority: Int = 0
     @State private var parsedPriorityString: String? = nil
     
+    // For Hover Effect on the Settings Button
+    @State private var isHoveringSettings = false
+    
     let eventStore = EKEventStore()
 
     let glassTransition = AnyTransition.asymmetric(
@@ -23,30 +26,61 @@ struct QuickAddView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            ZStack(alignment: .leading) {
-                if taskText.isEmpty {
-                    Text("Task (e.g., '!!! Gym at 5pm in Personal')")
+            
+            HStack(spacing: 12) {
+                // 1. THE SMART TEXT FIELD
+                ZStack(alignment: .leading) {
+                    if taskText.isEmpty {
+                        Text("Task (e.g., '!!! Gym at 5pm in Personal')")
+                            .font(.system(size: 24, weight: .light, design: .rounded))
+                            .foregroundColor(.gray.opacity(0.4))
+                            .allowsHitTesting(false)
+                    }
+                    
+                    Text(styledText(from: taskText))
                         .font(.system(size: 24, weight: .light, design: .rounded))
-                        .foregroundColor(.gray.opacity(0.4))
                         .allowsHitTesting(false)
+                    
+                    TextField("", text: $taskText)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 24, weight: .light, design: .rounded))
+                        .foregroundColor(.clear)
+                        .tint(.blue)
+                        .focused($isInputFocused)
+                        .onSubmit { saveTask() }
+                }
+                .onChange(of: taskText) { oldValue, newValue in
+                    withAnimation(.easeInOut(duration: 0.2)) { parseText() }
                 }
                 
-                Text(styledText(from: taskText))
-                    .font(.system(size: 24, weight: .light, design: .rounded))
-                    .allowsHitTesting(false)
-                
-                TextField("", text: $taskText)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 24, weight: .light, design: .rounded))
-                    .foregroundColor(.clear)
-                    .tint(.blue)
-                    .focused($isInputFocused)
-                    .onSubmit { saveTask() }
-            }
-            .onChange(of: taskText) { oldValue, newValue in
-                withAnimation(.easeInOut(duration: 0.2)) { parseText() }
+                // 🚨 NEW: Modern SwiftUI SettingsLink
+                if #available(macOS 14.0, *) {
+                    SettingsLink {
+                        Image(systemName: "gearshape.fill")
+                            .font(.system(size: 18))
+                            .foregroundColor(isHoveringSettings ? .primary : .gray.opacity(0.5))
+                            .padding(6)
+                            .background(isHoveringSettings ? Color.gray.opacity(0.2) : Color.clear)
+                            .clipShape(Circle())
+                            .animation(.easeInOut(duration: 0.15), value: isHoveringSettings)
+                    }
+                    .buttonStyle(.plain) // Removes the default ugly button background
+                    .onHover { hovering in
+                        isHoveringSettings = hovering
+                        if hovering { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+                    }
+                    // Binds the native Command + Comma shortcut directly to this button!
+                    .keyboardShortcut(",", modifiers: .command)
+                    .simultaneousGesture(TapGesture().onEnded {
+                        // Tell AppDelegate to hide the text bar when Settings opens
+                        if let appDelegate = NSApp.delegate as? AppDelegate {
+                            appDelegate.hidePanel()
+                        }
+                    })
+                }
             }
             
+            // 2. THE FLUID POP-UP UI (Chips)
             if parsedDate != nil || parsedList != nil || parsedPriority > 0 {
                 HStack(spacing: 12) {
                     if parsedPriority > 0 {
@@ -102,7 +136,6 @@ struct QuickAddView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("PanelDidOpen"))) { _ in
             isInputFocused = false
-            // 🚨 FIX: Slightly longer delay guarantees macOS is ready for focus
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
                 isInputFocused = true
             }
@@ -212,7 +245,6 @@ struct QuickAddView: View {
         taskText = ""
         parseText()
         
-        // 🚨 FIX: Broadcast the data payload safely instead of trying to cast to AppDelegate
         NotificationCenter.default.post(
             name: NSNotification.Name("TaskSaved"),
             object: nil,

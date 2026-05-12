@@ -1,15 +1,20 @@
 import SwiftUI
+import AppKit // 🚨 THE MISSING LINK! This tells Xcode where to find those missing methods.
 import KeyboardShortcuts
 
 extension KeyboardShortcuts.Name {
-    // 🚨 SHORTCUT FIX: Changed from .space to .n (Option + N) to avoid fighting with Raycast
     static let togglePanel = Self("togglePanel", default: .init(.n, modifiers: [.option]))
 }
 
 @main
 struct Simple_Reminder_AdderApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-    var body: some Scene { Settings { EmptyView() } }
+    
+    var body: some Scene {
+        Settings {
+            SettingsView()
+        }
+    }
 }
 
 class AppDelegate: NSObject, NSApplicationDelegate {
@@ -48,7 +53,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     func showPanel() {
-        NSApp.activate(ignoringOtherApps: true)
+        // 🚨 MODERN FIX: Handles macOS 14 properly
+        if #available(macOS 14.0, *) {
+            NSApp.activate()
+        } else {
+            NSApp.activate(ignoringOtherApps: true)
+        }
+        
         panel.center()
         panel.makeKeyAndOrderFront(nil)
         
@@ -59,10 +70,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         
         localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            // 1. Esc Key
             if event.keyCode == 53 {
                 self?.hidePanel()
                 return nil
             }
+            
+            // 2. Cmd + Comma (Settings)
+            if event.modifierFlags.contains(.command) && event.charactersIgnoringModifiers == "," {
+                self?.hidePanel()
+                self?.openSettingsWindow()
+                return nil
+            }
+            
             return event
         }
     }
@@ -71,6 +91,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         panel.orderOut(nil)
         if let global = globalClickMonitor { NSEvent.removeMonitor(global); globalClickMonitor = nil }
         if let local = localKeyMonitor { NSEvent.removeMonitor(local); localKeyMonitor = nil }
+    }
+    
+    func openSettingsWindow() {
+        // 🚨 MODERN FIX: Handles macOS 14 properly
+        if #available(macOS 14.0, *) {
+            NSApp.activate()
+        } else {
+            NSApp.activate(ignoringOtherApps: true)
+        }
+        // Sends the official command to open the Settings pane
+        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
     }
     
     func showToast(title: String, list: String, date: String?) {
@@ -93,8 +124,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         let screenRect = screen.visibleFrame
         let x = screenRect.midX - (dynamicWidth / 2)
-        
-        // 🚨 POSITION FIX: Multiplies screen height by 0.20 to set it at exactly 20%
         let y = screenRect.minY + (screenRect.height * 0.20)
         
         toastPanel?.setFrame(NSRect(x: x, y: y, width: dynamicWidth, height: dynamicHeight), display: true)
