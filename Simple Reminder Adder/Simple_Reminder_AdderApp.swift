@@ -17,10 +17,9 @@ struct Simple_Reminder_AdderApp: App {
 class AppDelegate: NSObject, NSApplicationDelegate {
     var panel: FloatingPanel!
     var globalClickMonitor: Any?
-    var localKeyMonitor: Any? // Added to listen for the Esc key
+    var localKeyMonitor: Any?
     
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // INCREASED HEIGHT: Changed height to 120 to make room for the List buttons
         panel = FloatingPanel(contentRect: NSRect(x: 0, y: 0, width: 600, height: 120))
         let hostingView = NSHostingView(rootView: QuickAddView())
         panel.contentView = hostingView
@@ -43,16 +42,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         panel.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         
-        // 1. Listen for outside clicks
+        // 🚨 NEW: Tell the SwiftUI view to instantly grab the text cursor
+        NotificationCenter.default.post(name: NSNotification.Name("PanelDidOpen"), object: nil)
+        
         globalClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
             self?.hidePanel()
         }
         
-        // 2. Listen for the 'Esc' key (KeyCode 53)
         localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             if event.keyCode == 53 {
                 self?.hidePanel()
-                return nil // Stops the "beep" sound
+                return nil
             }
             return event
         }
@@ -60,8 +60,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     func hidePanel() {
         panel.orderOut(nil)
-        
-        // Clean up memory
         if let global = globalClickMonitor { NSEvent.removeMonitor(global); globalClickMonitor = nil }
         if let local = localKeyMonitor { NSEvent.removeMonitor(local); localKeyMonitor = nil }
     }

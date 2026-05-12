@@ -5,57 +5,83 @@ struct QuickAddView: View {
     @State private var taskText: String = ""
     @State private var lists: [EKCalendar] = []
     
+    // 🚨 NEW: Focus State to auto-jump the cursor
+    @FocusState private var isInputFocused: Bool
+    
     // Intelligence State
     @State private var parsedDate: Date? = nil
     @State private var parsedDateString: String? = nil
     @State private var parsedList: EKCalendar? = nil
     @State private var parsedListString: String? = nil
     
+    // Priority State
+    @State private var parsedPriority: Int = 0 // 0=None, 1=High, 5=Medium, 9=Low
+    @State private var parsedPriorityString: String? = nil
+    
     let eventStore = EKEventStore()
+
+    // 🚨 NEW: The fluid "Liquid Glass" animation transition
+    let glassTransition = AnyTransition.asymmetric(
+        insertion: .scale(scale: 0.8, anchor: .trailing)
+            .combined(with: .move(edge: .trailing))
+            .combined(with: .opacity),
+        removal: .scale(scale: 0.8).combined(with: .opacity)
+    )
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             
             // 1. THE SMART TEXT FIELD
             ZStack(alignment: .leading) {
-                
-                // A. Placeholder
                 if taskText.isEmpty {
-                    Text("Task (e.g., 'Gym tomorrow in Personal')")
+                    Text("Task (e.g., '!!! Gym tomorrow in Personal')")
                         .font(.system(size: 24, weight: .light, design: .rounded))
                         .foregroundColor(.gray.opacity(0.4))
                         .allowsHitTesting(false)
                 }
                 
-                // B. The Syntax-Highlighted Text (Sits behind the real text field)
                 Text(styledText(from: taskText))
                     .font(.system(size: 24, weight: .light, design: .rounded))
-                    .allowsHitTesting(false) // Lets you click "through" it
+                    .allowsHitTesting(false)
+                    // Fluid animation for the text overlay changing
+                    .animation(.spring(response: 0.3, dampingFraction: 0.7), value: taskText)
                 
-                // C. The Actual Input (Text is invisible, but cursor works!)
                 TextField("", text: $taskText)
                     .textFieldStyle(.plain)
                     .font(.system(size: 24, weight: .light, design: .rounded))
-                    .foregroundColor(.clear) // Hides the boring text
-                    .tint(.blue) // Keeps the blinking cursor visible
-                    .onSubmit {
-                        saveTask()
-                    }
+                    .foregroundColor(.clear)
+                    .tint(.blue)
+                    .focused($isInputFocused) // Auto-focus binding
+                    .onSubmit { saveTask() }
             }
-            // Trigger the parsing engine on every keystroke
             .onChange(of: taskText) { _ in
-                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                // Trigger the parsing engine with a bouncy physics animation
+                withAnimation(.spring(response: 0.4, dampingFraction: 0.6, blendDuration: 0.5)) {
                     parseText()
                 }
             }
             
-            // 2. THE FLUID POP-UP UI
-            // This only appears if the engine finds a Date or a List
-            if parsedDate != nil || parsedList != nil {
+            // 2. THE FLUID POP-UP UI (Chips)
+            if parsedDate != nil || parsedList != nil || parsedPriority > 0 {
                 HStack(spacing: 12) {
                     
+                    // Priority Chip (Red/Yellow/Blue)
+                    if parsedPriority > 0 {
+                        HStack(spacing: 4) {
+                            Image(systemName: "exclamationmark.circle.fill")
+                            Text(parsedPriority == 1 ? "High" : (parsedPriority == 5 ? "Medium" : "Low"))
+                        }
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(priorityColor())
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(priorityColor().opacity(0.15))
+                        .clipShape(Capsule())
+                        .transition(glassTransition)
+                    }
+                    
                     // Date Chip (Orange)
-                    if let dateStr = parsedDateString, let date = parsedDate {
+                    if let date = parsedDate {
                         HStack(spacing: 4) {
                             Image(systemName: "clock.fill")
                             Text(date, format: .dateTime.hour().minute().weekday().day())
@@ -66,7 +92,7 @@ struct QuickAddView: View {
                         .padding(.vertical, 6)
                         .background(Color.orange.opacity(0.15))
                         .clipShape(Capsule())
-                        .transition(.move(edge: .bottom).combined(with: .opacity).combined(with: .scale))
+                        .transition(glassTransition)
                     }
                     
                     // List Chip (Purple)
@@ -81,7 +107,7 @@ struct QuickAddView: View {
                         .padding(.vertical, 6)
                         .background(Color.purple.opacity(0.15))
                         .clipShape(Capsule())
-                        .transition(.move(edge: .bottom).combined(with: .opacity).combined(with: .scale))
+                        .transition(glassTransition)
                     }
                 }
             }
@@ -91,49 +117,70 @@ struct QuickAddView: View {
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .onAppear {
             requestPermissionsAndFetchLists()
+            isInputFocused = true // Focus on first launch
         }
+        // 🚨 NEW: Listen for the AppDelegate telling us the panel opened
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("PanelDidOpen"))) { _ in
+            isInputFocused = true
+        }
+    }
+    
+    // Helper for Priority Colors
+    private func priorityColor() -> Color {
+        if parsedPriority == 1 { return .red }
+        if parsedPriority == 5 { return .yellow }
+        return .blue
     }
     
     // --- ENGINE: SYNTAX HIGHLIGHTER ---
     private func styledText(from text: String) -> AttributedString {
         var attrString = AttributedString(text)
-        attrString.foregroundColor = .primary // Default text color
+        attrString.foregroundColor = .primary
         
-        // Find and fade/color the Date
+        // Fade Priority Marks
+        if let pStr = parsedPriorityString, let range = attrString.range(of: pStr) {
+            attrString[range].foregroundColor = priorityColor().opacity(0.6)
+        }
         if let dateStr = parsedDateString, let range = attrString.range(of: dateStr) {
-            attrString[range].foregroundColor = .orange.opacity(0.4) // Faded Orange
+            attrString[range].foregroundColor = .orange.opacity(0.4)
         }
-        
-        // Find and fade/color the List name
         if let listStr = parsedListString, let range = attrString.range(of: listStr, options: .caseInsensitive) {
-            attrString[range].foregroundColor = .purple.opacity(0.4) // Faded Purple
+            attrString[range].foregroundColor = .purple.opacity(0.4)
         }
-        
         return attrString
     }
     
     // --- ENGINE: NATURAL LANGUAGE PARSER ---
     private func parseText() {
-        // Reset state
-        parsedDate = nil
-        parsedDateString = nil
-        parsedList = nil
-        parsedListString = nil
+        parsedDate = nil; parsedDateString = nil
+        parsedList = nil; parsedListString = nil
+        parsedPriority = 0; parsedPriorityString = nil
         
         guard !taskText.isEmpty else { return }
         
-        // 1. Scan for List Names
+        // 1. Scan for Priority (Must be at the very beginning)
+        if taskText.hasPrefix("!!!") {
+            parsedPriority = 1 // High
+            parsedPriorityString = "!!!"
+        } else if taskText.hasPrefix("!!") {
+            parsedPriority = 5 // Medium
+            parsedPriorityString = "!!"
+        } else if taskText.hasPrefix("!") {
+            parsedPriority = 9 // Low
+            parsedPriorityString = "!"
+        }
+        
+        // 2. Scan for List Names
         for list in lists {
-            // Looks for the exact list name as a standalone word
             let pattern = "\\b\\Q\(list.title)\\E\\b"
             if let range = taskText.range(of: pattern, options: [.regularExpression, .caseInsensitive]) {
                 parsedList = list
                 parsedListString = String(taskText[range])
-                break // Found it!
+                break
             }
         }
         
-        // 2. Scan for Dates & Times
+        // 3. Scan for Dates & Times
         if let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.date.rawValue) {
             let matches = detector.matches(in: taskText, options: [], range: NSRange(location: 0, length: taskText.utf16.count))
             if let match = matches.first, let date = match.date {
@@ -148,16 +195,12 @@ struct QuickAddView: View {
     // --- ENGINE: SAVE & CLEANUP ---
     private func saveTask() {
         guard !taskText.isEmpty else { return }
-        
         var cleanTitle = taskText
         
-        // Strip out the recognized text so your final task is clean
-        if let dStr = parsedDateString {
-            cleanTitle = cleanTitle.replacingOccurrences(of: dStr, with: "", options: .caseInsensitive)
-        }
+        if let pStr = parsedPriorityString { cleanTitle = cleanTitle.replacingOccurrences(of: pStr, with: "") }
+        if let dStr = parsedDateString { cleanTitle = cleanTitle.replacingOccurrences(of: dStr, with: "", options: .caseInsensitive) }
         if let lStr = parsedListString {
             cleanTitle = cleanTitle.replacingOccurrences(of: lStr, with: "", options: .caseInsensitive)
-            // Optional: clean up dangling words like "in" or "to"
             cleanTitle = cleanTitle.replacingOccurrences(of: " in ", with: " ")
             cleanTitle = cleanTitle.replacingOccurrences(of: " to ", with: " ")
         }
@@ -165,10 +208,10 @@ struct QuickAddView: View {
         cleanTitle = cleanTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         if cleanTitle.isEmpty { cleanTitle = "New Task" }
         
-        // Build the reminder
         let reminder = EKReminder(eventStore: eventStore)
         reminder.title = cleanTitle
         reminder.calendar = parsedList ?? eventStore.defaultCalendarForNewReminders()
+        reminder.priority = parsedPriority // Set the priority in EventKit!
         
         if let targetDate = parsedDate {
             reminder.dueDateComponents = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: targetDate)
@@ -177,30 +220,21 @@ struct QuickAddView: View {
         
         try? eventStore.save(reminder, commit: true)
         
-        // Reset and dismiss
         taskText = ""
-        parseText() // Clears the popups
+        parseText()
         
         if let appDelegate = NSApp.delegate as? AppDelegate {
             appDelegate.hidePanel()
         }
     }
     
-    // --- SETUP ---
     private func requestPermissionsAndFetchLists() {
         Task {
             do {
-                if #available(macOS 14.0, *) {
-                    try await eventStore.requestFullAccessToReminders()
-                } else {
-                    try await eventStore.requestAccess(to: .reminder)
-                }
-                DispatchQueue.main.async {
-                    self.lists = eventStore.calendars(for: .reminder)
-                }
-            } catch {
-                print("Permission error")
-            }
+                if #available(macOS 14.0, *) { try await eventStore.requestFullAccessToReminders() }
+                else { try await eventStore.requestAccess(to: .reminder) }
+                DispatchQueue.main.async { self.lists = eventStore.calendars(for: .reminder) }
+            } catch { print("Permission error") }
         }
     }
 }
