@@ -4,45 +4,84 @@ import EventKit
 struct QuickAddView: View {
     @State private var taskText: String = ""
     @State private var lists: [EKCalendar] = []
-    @State private var selectedList: EKCalendar?
+    
+    // Intelligence State
+    @State private var parsedDate: Date? = nil
+    @State private var parsedDateString: String? = nil
+    @State private var parsedList: EKCalendar? = nil
+    @State private var parsedListString: String? = nil
     
     let eventStore = EKEventStore()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             
-            // 1. The Main Input Field
-            TextField("Task (e.g. 'Gym tomorrow at 5pm')", text: $taskText)
-                .textFieldStyle(.plain)
-                .font(.system(size: 24, weight: .light, design: .rounded))
-                .onSubmit {
-                    saveTaskWithIntelligence(rawText: taskText)
-                    taskText = ""
-                    if let appDelegate = NSApp.delegate as? AppDelegate {
-                        appDelegate.hidePanel()
-                    }
+            // 1. THE SMART TEXT FIELD
+            ZStack(alignment: .leading) {
+                
+                // A. Placeholder
+                if taskText.isEmpty {
+                    Text("Task (e.g., 'Gym tomorrow in Personal')")
+                        .font(.system(size: 24, weight: .light, design: .rounded))
+                        .foregroundColor(.gray.opacity(0.4))
+                        .allowsHitTesting(false)
                 }
+                
+                // B. The Syntax-Highlighted Text (Sits behind the real text field)
+                Text(styledText(from: taskText))
+                    .font(.system(size: 24, weight: .light, design: .rounded))
+                    .allowsHitTesting(false) // Lets you click "through" it
+                
+                // C. The Actual Input (Text is invisible, but cursor works!)
+                TextField("", text: $taskText)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 24, weight: .light, design: .rounded))
+                    .foregroundColor(.clear) // Hides the boring text
+                    .tint(.blue) // Keeps the blinking cursor visible
+                    .onSubmit {
+                        saveTask()
+                    }
+            }
+            // Trigger the parsing engine on every keystroke
+            .onChange(of: taskText) { _ in
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                    parseText()
+                }
+            }
             
-            // 2. Quick-Select List Buttons
-            if !lists.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(lists, id: \.calendarIdentifier) { list in
-                            Text(list.title)
-                                .font(.system(size: 12, weight: .medium))
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 6)
-                                .background(selectedList == list ? Color.blue : Color.gray.opacity(0.2))
-                                .foregroundColor(selectedList == list ? .white : .primary.opacity(0.8))
-                                .clipShape(Capsule())
-                                // Hover effect for a premium feel
-                                .onHover { isHovering in
-                                    if isHovering { NSCursor.pointingHand.push() } else { NSCursor.pop() }
-                                }
-                                .onTapGesture {
-                                    selectedList = list // Route tasks to this list
-                                }
+            // 2. THE FLUID POP-UP UI
+            // This only appears if the engine finds a Date or a List
+            if parsedDate != nil || parsedList != nil {
+                HStack(spacing: 12) {
+                    
+                    // Date Chip (Orange)
+                    if let dateStr = parsedDateString, let date = parsedDate {
+                        HStack(spacing: 4) {
+                            Image(systemName: "clock.fill")
+                            Text(date, format: .dateTime.hour().minute().weekday().day())
                         }
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(.orange)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color.orange.opacity(0.15))
+                        .clipShape(Capsule())
+                        .transition(.move(edge: .bottom).combined(with: .opacity).combined(with: .scale))
+                    }
+                    
+                    // List Chip (Purple)
+                    if let list = parsedList {
+                        HStack(spacing: 4) {
+                            Image(systemName: "list.bullet")
+                            Text(list.title)
+                        }
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(.purple)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color.purple.opacity(0.15))
+                        .clipShape(Capsule())
+                        .transition(.move(edge: .bottom).combined(with: .opacity).combined(with: .scale))
                     }
                 }
             }
@@ -55,55 +94,99 @@ struct QuickAddView: View {
         }
     }
     
-    // --- INTELLIGENCE LOGIC ---
+    // --- ENGINE: SYNTAX HIGHLIGHTER ---
+    private func styledText(from text: String) -> AttributedString {
+        var attrString = AttributedString(text)
+        attrString.foregroundColor = .primary // Default text color
+        
+        // Find and fade/color the Date
+        if let dateStr = parsedDateString, let range = attrString.range(of: dateStr) {
+            attrString[range].foregroundColor = .orange.opacity(0.4) // Faded Orange
+        }
+        
+        // Find and fade/color the List name
+        if let listStr = parsedListString, let range = attrString.range(of: listStr, options: .caseInsensitive) {
+            attrString[range].foregroundColor = .purple.opacity(0.4) // Faded Purple
+        }
+        
+        return attrString
+    }
     
-    private func saveTaskWithIntelligence(rawText: String) {
-        guard !rawText.isEmpty else { return }
+    // --- ENGINE: NATURAL LANGUAGE PARSER ---
+    private func parseText() {
+        // Reset state
+        parsedDate = nil
+        parsedDateString = nil
+        parsedList = nil
+        parsedListString = nil
         
-        var finalTitle = rawText
-        var parsedDate: Date? = nil
+        guard !taskText.isEmpty else { return }
         
-        // 1. Natural Language Processing (Find dates/times in the text)
-        if let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.date.rawValue) {
-            let matches = detector.matches(in: rawText, options: [], range: NSRange(location: 0, length: rawText.utf16.count))
-            
-            // If we found a date (like "tomorrow at 5pm")
-            if let match = matches.first, let date = match.date {
-                parsedDate = date
-                
-                // Chop the date text out of the title so it's clean
-                if let range = Range(match.range, in: rawText) {
-                    finalTitle.removeSubrange(range)
-                    finalTitle = finalTitle.trimmingCharacters(in: .whitespaces)
-                }
+        // 1. Scan for List Names
+        for list in lists {
+            // Looks for the exact list name as a standalone word
+            let pattern = "\\b\\Q\(list.title)\\E\\b"
+            if let range = taskText.range(of: pattern, options: [.regularExpression, .caseInsensitive]) {
+                parsedList = list
+                parsedListString = String(taskText[range])
+                break // Found it!
             }
         }
         
-        // 2. Create the Reminder
-        let reminder = EKReminder(eventStore: eventStore)
-        reminder.title = finalTitle.isEmpty ? "New Task" : finalTitle // Fallback if they ONLY typed a date
-        
-        // Route to the clicked list, or the default list if none was clicked
-        reminder.calendar = selectedList ?? eventStore.defaultCalendarForNewReminders()
-        
-        // 3. Attach the Alarm/Date if NLP found one
-        if let targetDate = parsedDate {
-            reminder.dueDateComponents = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: targetDate)
-            reminder.addAlarm(EKAlarm(absoluteDate: targetDate))
-            print("📅 NLP detected date: \(targetDate)")
-        }
-        
-        // 4. Save
-        do {
-            try eventStore.save(reminder, commit: true)
-            print("✅ SAVED: '\(reminder.title)'")
-        } catch {
-            print("❌ FAILED: \(error.localizedDescription)")
+        // 2. Scan for Dates & Times
+        if let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.date.rawValue) {
+            let matches = detector.matches(in: taskText, options: [], range: NSRange(location: 0, length: taskText.utf16.count))
+            if let match = matches.first, let date = match.date {
+                if let range = Range(match.range, in: taskText) {
+                    parsedDateString = String(taskText[range])
+                    parsedDate = date
+                }
+            }
         }
     }
     
-    // --- SETUP LOGIC ---
+    // --- ENGINE: SAVE & CLEANUP ---
+    private func saveTask() {
+        guard !taskText.isEmpty else { return }
+        
+        var cleanTitle = taskText
+        
+        // Strip out the recognized text so your final task is clean
+        if let dStr = parsedDateString {
+            cleanTitle = cleanTitle.replacingOccurrences(of: dStr, with: "", options: .caseInsensitive)
+        }
+        if let lStr = parsedListString {
+            cleanTitle = cleanTitle.replacingOccurrences(of: lStr, with: "", options: .caseInsensitive)
+            // Optional: clean up dangling words like "in" or "to"
+            cleanTitle = cleanTitle.replacingOccurrences(of: " in ", with: " ")
+            cleanTitle = cleanTitle.replacingOccurrences(of: " to ", with: " ")
+        }
+        
+        cleanTitle = cleanTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleanTitle.isEmpty { cleanTitle = "New Task" }
+        
+        // Build the reminder
+        let reminder = EKReminder(eventStore: eventStore)
+        reminder.title = cleanTitle
+        reminder.calendar = parsedList ?? eventStore.defaultCalendarForNewReminders()
+        
+        if let targetDate = parsedDate {
+            reminder.dueDateComponents = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: targetDate)
+            reminder.addAlarm(EKAlarm(absoluteDate: targetDate))
+        }
+        
+        try? eventStore.save(reminder, commit: true)
+        
+        // Reset and dismiss
+        taskText = ""
+        parseText() // Clears the popups
+        
+        if let appDelegate = NSApp.delegate as? AppDelegate {
+            appDelegate.hidePanel()
+        }
+    }
     
+    // --- SETUP ---
     private func requestPermissionsAndFetchLists() {
         Task {
             do {
@@ -112,14 +195,11 @@ struct QuickAddView: View {
                 } else {
                     try await eventStore.requestAccess(to: .reminder)
                 }
-                
-                // Once permission is granted, fetch their lists!
                 DispatchQueue.main.async {
                     self.lists = eventStore.calendars(for: .reminder)
-                    self.selectedList = eventStore.defaultCalendarForNewReminders()
                 }
             } catch {
-                print("❌ Permission error: \(error.localizedDescription)")
+                print("Permission error")
             }
         }
     }
