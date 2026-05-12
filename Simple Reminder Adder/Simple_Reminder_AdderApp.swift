@@ -1,7 +1,6 @@
 import SwiftUI
 import KeyboardShortcuts
 
-// Define the global shortcut (Default: Option + Space)
 extension KeyboardShortcuts.Name {
     static let togglePanel = Self("togglePanel", default: .init(.space, modifiers: [.option]))
 }
@@ -17,54 +16,53 @@ struct Simple_Reminder_AdderApp: App {
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     var panel: FloatingPanel!
-    var clickMonitor: Any?
+    var globalClickMonitor: Any?
+    var localKeyMonitor: Any? // Added to listen for the Esc key
     
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // 1. Initialize the floating panel
-        panel = FloatingPanel(contentRect: NSRect(x: 0, y: 0, width: 600, height: 70))
+        // INCREASED HEIGHT: Changed height to 120 to make room for the List buttons
+        panel = FloatingPanel(contentRect: NSRect(x: 0, y: 0, width: 600, height: 120))
         let hostingView = NSHostingView(rootView: QuickAddView())
         panel.contentView = hostingView
         
-        // 2. Hide the dock icon (runs in background)
         NSApp.setActivationPolicy(.accessory)
         
-        // 3. Listen for the global shortcut
         KeyboardShortcuts.onKeyDown(for: .togglePanel) { [weak self] in
             self?.togglePanel()
         }
         
-        // 4. FORCE the panel to show up when you hit Play in Xcode
         showPanel()
     }
     
-    // Toggles the window on and off
     func togglePanel() {
-        if panel.isVisible {
-            hidePanel()
-        } else {
-            showPanel()
-        }
+        if panel.isVisible { hidePanel() } else { showPanel() }
     }
     
-    // Shows the window and starts listening for outside clicks
     func showPanel() {
         panel.center()
         panel.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true) // Brings focus to the text box
+        NSApp.activate(ignoringOtherApps: true)
         
-        // Create a monitor to listen for clicks outside our app
-        clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+        // 1. Listen for outside clicks
+        globalClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
             self?.hidePanel()
+        }
+        
+        // 2. Listen for the 'Esc' key (KeyCode 53)
+        localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            if event.keyCode == 53 {
+                self?.hidePanel()
+                return nil // Stops the "beep" sound
+            }
+            return event
         }
     }
     
-    // Hides the window and stops listening for clicks
     func hidePanel() {
         panel.orderOut(nil)
         
-        if let monitor = clickMonitor {
-            NSEvent.removeMonitor(monitor)
-            clickMonitor = nil
-        }
+        // Clean up memory
+        if let global = globalClickMonitor { NSEvent.removeMonitor(global); globalClickMonitor = nil }
+        if let local = localKeyMonitor { NSEvent.removeMonitor(local); localKeyMonitor = nil }
     }
 }
