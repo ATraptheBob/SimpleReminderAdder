@@ -29,12 +29,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// Bumped on every `syncChipsPanel` so stale animation completions cannot order out a newer chips state.
     private var chipsSyncGeneration: UInt64 = 0
 
+    private var listPickerIsOpen: Bool = false
+    private let mainInputBarHeight: CGFloat = 58
+    private let mainPanelCollapsedHeight: CGFloat = 58
+    private let mainPanelListPickerExpandedHeight: CGFloat = 304
+
     // Current parsed state driving the chips panel
     private var chipsState: (priority: Int, date: Date?, listName: String?) = (0, nil, nil)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        panel = FloatingPanel(contentRect: NSRect(x: 0, y: 0, width: 580, height: 64))
+        panel = FloatingPanel(contentRect: NSRect(x: 0, y: 0, width: 580, height: 58))
         panel.contentView = NSHostingView(rootView: QuickAddView())
+        panel.hasShadow = false
 
         NSApp.setActivationPolicy(.accessory)
 
@@ -60,12 +66,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             object: nil,
             queue: .main
         ) { [weak self] notification in
-            self?.hidePanel()
+            guard let self else { return }
             guard let info = notification.userInfo,
                   let title = info["title"] as? String,
                   let list  = info["list"]  as? String else { return }
+            let keepOpen = (info["keepPanelOpen"] as? Bool) == true
+            if !keepOpen {
+                hidePanel()
+            }
             let rawDate = info["date"] as? String
-            self?.showToast(title: title, list: list, date: rawDate?.isEmpty == false ? rawDate : nil)
+            showToast(title: title, list: list, date: rawDate?.isEmpty == false ? rawDate : nil)
+        }
+
+        NotificationCenter.default.addObserver(
+            forName: .mainPanelListPickerLayout,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            guard let self else { return }
+            let open = (note.userInfo?["open"] as? Bool) == true
+            self.listPickerIsOpen = open
+            self.resizeMainPanelForListPicker(open: open)
         }
 
         showPanel()
@@ -83,7 +104,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         panel.center()
         panel.makeKeyAndOrderFront(nil)
-        syncChipsPanel()
+        DispatchQueue.main.async { [weak self] in self?.syncChipsPanel() }
 
         NotificationCenter.default.post(name: NSNotification.Name("PanelDidOpen"), object: nil)
 
@@ -92,31 +113,86 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            if event.keyCode == 53 { self?.hidePanel(); return nil }
-            // Prefer keyCode so Cmd+, opens Settings on non-US keyboard layouts.
-            if event.modifierFlags.contains(.command), event.keyCode == 43 {
-                self?.hidePanel(); self?.openSettingsWindow(); return nil
+            guard let self else { return event }
+            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+
+            if event.keyCode == 53 {
+                if listPickerIsOpen {
+                    NotificationCenter.default.post(name: .listPickerCancel, object: nil)
+                    return nil
+                }
+                hidePanel()
+                return nil
             }
-            // Tab: accept ghost autocomplete (and avoid NSTextField selecting all text).
+
+            if flags.contains(.command), event.keyCode == 43 {
+                hidePanel()
+                openSettingsWindow()
+                return nil
+            }
+
+            let isReturn = event.keyCode == 36 || event.keyCode == 76
+            if isReturn {
+                if listPickerIsOpen {
+                    NotificationCenter.default.post(name: .listPickerConfirm, object: nil)
+                    return nil
+                }
+                if flags.contains(.shift) {
+                    NotificationCenter.default.post(name: .quickAddShiftReturnSave, object: nil)
+                    return nil
+                }
+                return event
+            }
+
+            if listPickerIsOpen {
+                if event.keyCode == 125 {
+                    NotificationCenter.default.post(name: .listPickerNavigate, object: nil, userInfo: ["delta": 1])
+                    return nil
+                }
+                if event.keyCode == 126 {
+                    NotificationCenter.default.post(name: .listPickerNavigate, object: nil, userInfo: ["delta": -1])
+                    return nil
+                }
+            }
+
             if event.keyCode == 48 {
-                let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
                 if flags.contains(.command) || flags.contains(.control) || flags.contains(.option) {
                     return event
+                }
+                if listPickerIsOpen {
+                    let delta = flags.contains(.shift) ? -1 : 1
+                    NotificationCenter.default.post(name: .listPickerNavigate, object: nil, userInfo: ["delta": delta])
+                    return nil
                 }
                 NotificationCenter.default.post(name: .quickAddTabAcceptSuggestion, object: nil)
                 return nil
             }
+
             return event
         }
     }
 
     func hidePanel() {
+        listPickerIsOpen = false
+        resizeMainPanelForListPicker(open: false)
         panel.orderOut(nil)
         chipsPanel?.orderOut(nil)
         if let m = globalClickMonitor { NSEvent.removeMonitor(m); globalClickMonitor = nil }
         if let m = localKeyMonitor    { NSEvent.removeMonitor(m); localKeyMonitor = nil }
         // Reset chips state for next open
         chipsState = (0, nil, nil)
+    }
+
+    private func resizeMainPanelForListPicker(open: Bool) {
+        let newH = open ? mainPanelListPickerExpandedHeight : mainPanelCollapsedHeight
+        var f = panel.frame
+        guard abs(f.size.height - newH) > 0.5 else {
+            DispatchQueue.main.async { [weak self] in self?.syncChipsPanel() }
+            return
+        }
+        f.size.height = newH
+        panel.setFrame(f, display: true, animate: false)
+        DispatchQueue.main.async { [weak self] in self?.syncChipsPanel() }
     }
 
     // MARK: - Chips panel
@@ -151,6 +227,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             )
             chipsPanel?.ignoresMouseEvents = true
             chipsPanel?.level = .floating
+            chipsPanel?.hasShadow = false
         }
 
         // Measure using a temp window so fittingSize is accurate
@@ -168,7 +245,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         let panelFrame = panel.frame
         let anchorX = panelFrame.midX
-        let anchorY = panelFrame.midY
+        let anchorY = panelFrame.minY + mainInputBarHeight / 2
         let gapBelowMain: CGFloat = 6
 
         let x = anchorX - safeSize.width / 2
