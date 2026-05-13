@@ -15,7 +15,7 @@ struct QuickAddView: View {
     @State private var parsedPriorityString: String? = nil
     
     // For Hover Effect on the Settings Button
-    @State private var isHoveringSettings = false
+    @State private var isHoveringSettings = false 
     
     let eventStore = EKEventStore()
 
