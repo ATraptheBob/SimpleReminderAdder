@@ -32,10 +32,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var listPickerIsOpen: Bool = false
     private let mainInputBarHeight: CGFloat = 58
     private let mainPanelCollapsedHeight: CGFloat = 58
-    private let mainPanelListPickerExpandedHeight: CGFloat = 304
+    private let mainPanelListPickerExpandedHeight: CGFloat = 296
 
     // Current parsed state driving the chips panel
     private var chipsState: (priority: Int, date: Date?, listName: String?) = (0, nil, nil)
+
+    private var searchResultsPanel: FloatingPanel?
+    private var searchModeIsOpen: Bool = false
+    private var searchHitRows: [SearchHitRowModel] = []
+    private var searchSyncGeneration: UInt64 = 0
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         panel = FloatingPanel(contentRect: NSRect(x: 0, y: 0, width: 580, height: 58))
@@ -89,6 +94,38 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self.resizeMainPanelForListPicker(open: open)
         }
 
+        NotificationCenter.default.addObserver(
+            forName: .searchModePresence,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            guard let self else { return }
+            self.searchModeIsOpen = (note.userInfo?["active"] as? Bool) == true
+            if !self.searchModeIsOpen {
+                self.searchHitRows = []
+            }
+            self.syncChipsPanel()
+            self.syncSearchResultsPanel()
+        }
+
+        NotificationCenter.default.addObserver(
+            forName: .searchResultsUpdated,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            guard let self else { return }
+            if let raw = note.userInfo?["hits"] as? [[String: Any]] {
+                self.searchHitRows = raw.compactMap { dict in
+                    guard let id = dict["id"] as? String, let title = dict["title"] as? String else { return nil }
+                    let sub = dict["subtitle"] as? String ?? ""
+                    return SearchHitRowModel(id: id, title: title, subtitle: sub)
+                }
+            } else {
+                self.searchHitRows = []
+            }
+            self.syncSearchResultsPanel()
+        }
+
         showPanel()
     }
 
@@ -121,7 +158,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     NotificationCenter.default.post(name: .listPickerCancel, object: nil)
                     return nil
                 }
+                if searchModeIsOpen {
+                    NotificationCenter.default.post(name: .forceExitSearchMode, object: nil)
+                    return nil
+                }
                 hidePanel()
+                return nil
+            }
+
+            if flags.contains(.command), event.keyCode == 3 {
+                NotificationCenter.default.post(name: .searchHotkeyToggle, object: nil)
                 return nil
             }
 
@@ -135,6 +181,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             if isReturn {
                 if listPickerIsOpen {
                     NotificationCenter.default.post(name: .listPickerConfirm, object: nil)
+                    return nil
+                }
+                if searchModeIsOpen {
                     return nil
                 }
                 if flags.contains(.shift) {
@@ -173,7 +222,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func hidePanel() {
+        NotificationCenter.default.post(name: .forceExitSearchMode, object: nil)
         listPickerIsOpen = false
+        searchModeIsOpen = false
+        searchHitRows = []
+        searchResultsPanel?.orderOut(nil)
         resizeMainPanelForListPicker(open: false)
         panel.orderOut(nil)
         chipsPanel?.orderOut(nil)
@@ -198,6 +251,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Chips panel
 
     private func syncChipsPanel() {
+        if searchModeIsOpen {
+            if let cp = chipsPanel, cp.isVisible {
+                NSAnimationContext.runAnimationGroup { ctx in
+                    ctx.duration = 0.15
+                    ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                    ctx.allowsImplicitAnimation = true
+                    cp.animator().alphaValue = 0
+                } completionHandler: {
+                    cp.alphaValue = 1
+                    cp.orderOut(nil)
+                }
+            }
+            return
+        }
+
         chipsSyncGeneration += 1
         let gen = chipsSyncGeneration
 
@@ -289,6 +357,98 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
                 ctx.allowsImplicitAnimation = true
                 chipsPanel?.animator().setFrame(targetFrame, display: true)
+            }
+        }
+    }
+
+    // MARK: - Search results strip
+
+    private func syncSearchResultsPanel() {
+        searchSyncGeneration += 1
+        let gen = searchSyncGeneration
+
+        guard searchModeIsOpen else {
+            if let sp = searchResultsPanel, sp.isVisible {
+                NSAnimationContext.runAnimationGroup({ ctx in
+                    ctx.duration = 0.15
+                    ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                    ctx.allowsImplicitAnimation = true
+                    sp.animator().alphaValue = 0
+                }, completionHandler: { [weak self] in
+                    guard let self, gen == self.searchSyncGeneration else { return }
+                    sp.alphaValue = 1
+                    sp.orderOut(nil)
+                })
+            }
+            return
+        }
+
+        guard !searchHitRows.isEmpty else {
+            if let sp = searchResultsPanel, sp.isVisible {
+                sp.orderOut(nil)
+            }
+            return
+        }
+
+        if searchResultsPanel == nil {
+            searchResultsPanel = FloatingPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel])
+            searchResultsPanel?.level = .floating
+            searchResultsPanel?.hasShadow = false
+            searchResultsPanel?.backgroundColor = .clear
+            searchResultsPanel?.isOpaque = false
+        }
+
+        let strip = SearchResultsStripView(hits: searchHitRows)
+        let host = NSHostingView(rootView: strip)
+        host.frame = NSRect(x: 0, y: 0, width: 2000, height: 400)
+        host.layoutSubtreeIfNeeded()
+        let size = host.fittingSize
+        let safeSize = NSSize(width: ceil(size.width) + 12, height: ceil(size.height) + 14)
+
+        let panelFrame = panel.frame
+        let anchorX = panelFrame.midX
+        let anchorY = panelFrame.minY + mainInputBarHeight / 2
+        let gapBelowMain: CGFloat = 6
+
+        let x = anchorX - safeSize.width / 2
+        let y = panelFrame.minY - safeSize.height - gapBelowMain
+        let targetFrame = NSRect(origin: NSPoint(x: x, y: y), size: safeSize)
+
+        searchResultsPanel?.contentView = host
+        searchResultsPanel?.contentView?.clipsToBounds = false
+
+        if let sp = searchResultsPanel, sp.isVisible, sp.alphaValue < 0.999 {
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0
+                ctx.allowsImplicitAnimation = false
+                sp.alphaValue = 1
+            }
+        }
+
+        if searchResultsPanel?.isVisible == false {
+            let startFrame = NSRect(
+                x: anchorX - safeSize.width / 2,
+                y: anchorY - safeSize.height / 2,
+                width: safeSize.width,
+                height: safeSize.height
+            )
+            searchResultsPanel?.setFrame(startFrame, display: false)
+            searchResultsPanel?.alphaValue = 0
+            searchResultsPanel?.orderFront(nil)
+
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.32
+                ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.22, 1.0, 0.36, 1.0)
+                ctx.allowsImplicitAnimation = true
+                searchResultsPanel?.animator().setFrame(targetFrame, display: true)
+                searchResultsPanel?.animator().alphaValue = 1
+            }
+        } else {
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.2
+                ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                ctx.allowsImplicitAnimation = true
+                searchResultsPanel?.animator().setFrame(targetFrame, display: true)
             }
         }
     }
