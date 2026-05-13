@@ -23,6 +23,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var globalClickMonitor: Any?
     var localKeyMonitor: Any?
 
+    private var toastDismissWorkItem: DispatchWorkItem?
+    private var toastShowGeneration: UInt64 = 0
+
+    /// Bumped on every `syncChipsPanel` so stale animation completions cannot order out a newer chips state.
+    private var chipsSyncGeneration: UInt64 = 0
+
     // Current parsed state driving the chips panel
     private var chipsState: (priority: Int, date: Date?, listName: String?) = (0, nil, nil)
 
@@ -87,8 +93,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             if event.keyCode == 53 { self?.hidePanel(); return nil }
-            if event.modifierFlags.contains(.command) && event.charactersIgnoringModifiers == "," {
+            // Prefer keyCode so Cmd+, opens Settings on non-US keyboard layouts.
+            if event.modifierFlags.contains(.command), event.keyCode == 43 {
                 self?.hidePanel(); self?.openSettingsWindow(); return nil
+            }
+            // Tab: accept ghost autocomplete (and avoid NSTextField selecting all text).
+            if event.keyCode == 48 {
+                let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+                if flags.contains(.command) || flags.contains(.control) || flags.contains(.option) {
+                    return event
+                }
+                NotificationCenter.default.post(name: .quickAddTabAcceptSuggestion, object: nil)
+                return nil
             }
             return event
         }
@@ -106,15 +122,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Chips panel
 
     private func syncChipsPanel() {
+        chipsSyncGeneration += 1
+        let gen = chipsSyncGeneration
+
         let hasChips = chipsState.priority > 0 || chipsState.date != nil || chipsState.listName != nil
 
         guard hasChips else {
             if let cp = chipsPanel, cp.isVisible {
                 NSAnimationContext.runAnimationGroup { ctx in
-                    ctx.duration = 0.22
-                    ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
+                    ctx.duration = 0.2
+                    ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                    ctx.allowsImplicitAnimation = true
                     cp.animator().alphaValue = 0
-                } completionHandler: { cp.orderOut(nil) }
+                } completionHandler: { [weak self] in
+                    guard let self, gen == self.chipsSyncGeneration else { return }
+                    cp.alphaValue = 1
+                    cp.orderOut(nil)
+                }
             }
             return
         }
@@ -147,11 +171,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         chipsPanel?.contentView = host
 
+        if let cp = chipsPanel, cp.isVisible, cp.alphaValue < 0.999 {
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0
+                ctx.allowsImplicitAnimation = false
+                cp.alphaValue = 1
+            }
+        }
+
         if chipsPanel?.isVisible == false {
-            // Liquid drop: start from main panel bottom, spring downward into place
             let startFrame = NSRect(
                 x: panelFrame.midX - safeSize.width / 2,
-                y: panelFrame.minY - 4,          // starts flush with bottom of main panel
+                y: panelFrame.minY - 4,
                 width: safeSize.width,
                 height: safeSize.height
             )
@@ -160,15 +191,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             chipsPanel?.orderFront(nil)
 
             NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = 0.42
-                ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 1.4, 0.4, 1.0)
+                ctx.duration = 0.36
+                ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.22, 1.0, 0.36, 1.0)
+                ctx.allowsImplicitAnimation = true
                 chipsPanel?.animator().setFrame(targetFrame, display: true)
                 chipsPanel?.animator().alphaValue = 1
             }
         } else {
             NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = 0.28
+                ctx.duration = 0.24
                 ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                ctx.allowsImplicitAnimation = true
                 chipsPanel?.animator().setFrame(targetFrame, display: true)
             }
         }
@@ -185,6 +218,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Toast
 
     func showToast(title: String, list: String, date: String?) {
+        toastShowGeneration += 1
+        let showGen = toastShowGeneration
+
         let toastView = ToastView(title: title, list: list, dateStr: date)
         let host = NSHostingView(rootView: toastView)
         host.layout()
@@ -197,6 +233,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             toastPanel?.styleMask.insert(.nonactivatingPanel)
         }
 
+        toastDismissWorkItem?.cancel()
+
         toastPanel?.contentView = host
 
         guard let screen = panel.screen ?? NSScreen.main else { return }
@@ -204,31 +242,37 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let x  = sf.midX - size.width / 2
         let y  = sf.minY + sf.height * 0.18          // resting position
 
-        let startFrame   = NSRect(x: x, y: y - 20, width: size.width, height: size.height)
+        let startFrame   = NSRect(x: x, y: y - 16, width: size.width, height: size.height)
         let restingFrame = NSRect(x: x, y: y,       width: size.width, height: size.height)
 
         toastPanel?.setFrame(startFrame, display: false)
         toastPanel?.alphaValue = 0
         toastPanel?.orderFront(nil)
 
-        // Slide up + fade in
         NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.30
-            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            ctx.duration = 0.26
+            ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.0, 0.0, 0.2, 1.0)
+            ctx.allowsImplicitAnimation = true
             toastPanel?.animator().setFrame(restingFrame, display: true)
             toastPanel?.animator().alphaValue = 1
         }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
-            let exitFrame = NSRect(x: x, y: y - 20, width: size.width, height: size.height)
+        let dismiss = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            guard showGen == self.toastShowGeneration else { return }
+            let exitFrame = NSRect(x: x, y: y - 16, width: size.width, height: size.height)
             NSAnimationContext.runAnimationGroup({ ctx in
-                ctx.duration = 0.35
-                ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
+                ctx.duration = 0.28
+                ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                ctx.allowsImplicitAnimation = true
                 self.toastPanel?.animator().setFrame(exitFrame, display: true)
                 self.toastPanel?.animator().alphaValue = 0
-            }, completionHandler: {
+            }, completionHandler: { [weak self] in
+                guard let self, showGen == self.toastShowGeneration else { return }
                 self.toastPanel?.orderOut(nil)
             })
         }
+        toastDismissWorkItem = dismiss
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.4, execute: dismiss)
     }
 }

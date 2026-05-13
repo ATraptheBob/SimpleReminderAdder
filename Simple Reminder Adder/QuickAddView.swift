@@ -1,5 +1,11 @@
 import SwiftUI
+import AppKit
 import EventKit
+
+extension Notification.Name {
+    /// Posted when the user presses Tab in the quick-add panel; the view applies autocomplete if available.
+    static let quickAddTabAcceptSuggestion = Notification.Name("QuickAddTabAcceptSuggestion")
+}
 
 private struct ChipSet: Equatable {
     var priority: Int
@@ -95,6 +101,9 @@ struct QuickAddView: View {
                 forcePostChipState()
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .quickAddTabAcceptSuggestion)) { _ in
+            acceptSuggestion()
+        }
     }
 
     // MARK: - Ghost text / suggestion
@@ -151,7 +160,7 @@ struct QuickAddView: View {
         }
     }
 
-    // MARK: - Tab acceptance (called from AppDelegate key monitor)
+    // MARK: - Tab → autocomplete (see `Notification.Name.quickAddTabAcceptSuggestion`)
 
     func acceptSuggestion() {
         guard !suggestion.isEmpty else { return }
@@ -271,7 +280,12 @@ struct QuickAddView: View {
             reminder.dueDateComponents = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: d)
             reminder.addAlarm(EKAlarm(absoluteDate: d))
         }
-        try? eventStore.save(reminder, commit: true)
+        do {
+            try eventStore.save(reminder, commit: true)
+        } catch {
+            NSSound.beep()
+            return
+        }
 
         let finalTitle = cleanTitle
         let finalListTitle = dest?.title ?? "Reminders"
