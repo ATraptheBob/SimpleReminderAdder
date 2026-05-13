@@ -144,10 +144,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         if chipsPanel == nil {
-            chipsPanel = FloatingPanel(contentRect: .zero)
+            // Borderless avoids titled-bar clipping that can cut off capsule bottoms with multiple chips.
+            chipsPanel = FloatingPanel(
+                contentRect: .zero,
+                styleMask: [.borderless, .nonactivatingPanel]
+            )
             chipsPanel?.ignoresMouseEvents = true
             chipsPanel?.level = .floating
-            chipsPanel?.styleMask.insert(.nonactivatingPanel)
         }
 
         // Measure using a temp window so fittingSize is accurate
@@ -157,19 +160,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             listName: chipsState.listName
         )
         let host = NSHostingView(rootView: chipsView)
-        host.frame = NSRect(x: 0, y: 0, width: 800, height: 200)
-        host.layout()
+        host.frame = NSRect(x: 0, y: 0, width: 1600, height: 400)
+        host.layoutSubtreeIfNeeded()
         let size = host.fittingSize
-        // Add 2pt safety margin so nothing clips
-        let safeSize = NSSize(width: ceil(size.width) + 4, height: ceil(size.height) + 4)
+        // Extra insets: NSHostingView often underreports capsule + material height with several chips in a row.
+        let safeSize = NSSize(width: ceil(size.width) + 10, height: ceil(size.height) + 16)
 
         let panelFrame = panel.frame
-        let x = panelFrame.midX - safeSize.width / 2
-        let y = panelFrame.minY - safeSize.height - 4
+        let anchorX = panelFrame.midX
+        let anchorY = panelFrame.midY
+        let gapBelowMain: CGFloat = 6
+
+        let x = anchorX - safeSize.width / 2
+        let y = panelFrame.minY - safeSize.height - gapBelowMain
 
         let targetFrame = NSRect(origin: NSPoint(x: x, y: y), size: safeSize)
 
         chipsPanel?.contentView = host
+        chipsPanel?.contentView?.clipsToBounds = false
 
         if let cp = chipsPanel, cp.isVisible, cp.alphaValue < 0.999 {
             NSAnimationContext.runAnimationGroup { ctx in
@@ -180,9 +188,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         if chipsPanel?.isVisible == false {
+            // Start centered on the quick-add bar (text field), then drop to final position below.
             let startFrame = NSRect(
-                x: panelFrame.midX - safeSize.width / 2,
-                y: panelFrame.minY - 4,
+                x: anchorX - safeSize.width / 2,
+                y: anchorY - safeSize.height / 2,
                 width: safeSize.width,
                 height: safeSize.height
             )

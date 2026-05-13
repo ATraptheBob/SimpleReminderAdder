@@ -29,9 +29,9 @@ struct ChipsView: View {
                 )
             }
         }
-        .fixedSize()
+        .fixedSize(horizontal: true, vertical: true)
         .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        .padding(.vertical, 12)
     }
 
     @ViewBuilder
