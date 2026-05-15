@@ -5,7 +5,7 @@ final class ChipsOverlayState: ObservableObject {
     @Published var priorityExpanded = false
 }
 
-private enum ChipSwipeKind: String {
+private enum ChipKind: String {
     case priority, date, time, list
 }
 
@@ -23,16 +23,26 @@ struct ChipsView: View {
     @State private var sliderT: Double = 0.5
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 7) {
             if priority > 0 {
                 prioritySection
             }
             if let date {
                 if showDatePill {
-                    chip(kind: .date, icon: "calendar", label: date.formatted(.dateTime.weekday(.wide).month(.abbreviated).day()), glow: highlightDate)
+                    chip(
+                        kind: .date,
+                        icon: "calendar",
+                        label: date.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()),
+                        glow: highlightDate
+                    )
                 }
                 if showTimePill {
-                    chip(kind: .time, icon: "clock", label: date.formatted(date: .omitted, time: .shortened), glow: highlightTime)
+                    chip(
+                        kind: .time,
+                        icon: "clock",
+                        label: date.formatted(date: .omitted, time: .shortened),
+                        glow: highlightTime
+                    )
                 }
             }
             if let name = listName {
@@ -40,34 +50,40 @@ struct ChipsView: View {
             }
         }
         .fixedSize(horizontal: true, vertical: true)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
         .onAppear { syncSliderFromPriority() }
         .onChange(of: priority) { _, _ in syncSliderFromPriority() }
     }
 
+    // MARK: - Priority section
+
     @ViewBuilder
     private var prioritySection: some View {
-        let c = priorityColor(for: displayPriority)
-        VStack(alignment: .leading, spacing: 6) {
-            chip(kind: .priority, icon: "exclamationmark.circle.fill", label: priorityLabel(for: displayPriority), glow: false)
-                .onTapGesture {
-                    withAnimation(.spring(response: 0.28, dampingFraction: 0.88)) {
-                        overlay.priorityExpanded.toggle()
-                        NotificationCenter.default.post(name: .chipsLayoutChanged, object: nil)
-                    }
+        VStack(alignment: .leading, spacing: 5) {
+            chip(
+                kind: .priority,
+                icon: "exclamationmark.circle.fill",
+                label: priorityLabel(for: displayPriority),
+                glow: false
+            )
+            .onTapGesture {
+                withAnimation(.spring(response: 0.26, dampingFraction: 0.82)) {
+                    overlay.priorityExpanded.toggle()
+                    NotificationCenter.default.post(name: .chipsLayoutChanged, object: nil)
                 }
+            }
+
             if overlay.priorityExpanded {
-                prioritySlider(accent: c)
+                prioritySlider(accent: chipColor(kind: .priority))
                     .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
-        .animation(.spring(response: 0.28, dampingFraction: 0.88), value: overlay.priorityExpanded)
+        .animation(.spring(response: 0.26, dampingFraction: 0.82), value: overlay.priorityExpanded)
     }
 
     private func prioritySlider(accent: Color) -> some View {
-        let trackLow = Color.primary.opacity(0.12)
-        return VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 4) {
             Slider(value: $sliderT, in: 0...1, onEditingChanged: { live in
                 if !live {
                     let v = priorityFromSlider(sliderT)
@@ -80,22 +96,16 @@ struct ChipsView: View {
             })
             .tint(accent)
             .controlSize(.small)
-            .background(
-                Capsule()
-                    .fill(LinearGradient(colors: [trackLow, accent.opacity(0.85)], startPoint: .leading, endPoint: .trailing))
-                    .frame(height: 5)
-                    .padding(.horizontal, 2)
-                    .allowsHitTesting(false)
-            )
         }
-        .frame(width: 148)
+        .frame(width: 140)
+        .padding(.horizontal, 2)
     }
 
     private func syncSliderFromPriority() {
         switch priority {
-        case 1: sliderT = 1
-        case 5: sliderT = 0.5
-        case 9: sliderT = 0
+        case 1:  sliderT = 1.0
+        case 5:  sliderT = 0.5
+        case 9:  sliderT = 0.0
         default: sliderT = 0.5
         }
     }
@@ -112,45 +122,54 @@ struct ChipsView: View {
 
     private func priorityLabel(for p: Int) -> String {
         switch p {
-        case 1: return "High"
-        case 5: return "Medium"
+        case 1:  return "High"
+        case 5:  return "Medium"
         default: return "Low"
         }
     }
 
+    // MARK: - Chip
+
+    // Design matches the toast pills: very subtle fill, colored stroke + text.
+    // Same PanelChrome tokens, same VisualEffectView backdrop.
     @ViewBuilder
-    private func chip(kind: ChipSwipeKind, icon: String, label: String, glow: Bool) -> some View {
+    private func chip(kind: ChipKind, icon: String, label: String, glow: Bool) -> some View {
         let color = chipColor(kind: kind)
-        HStack(spacing: 5) {
+        HStack(spacing: 4) {
             Image(systemName: icon)
-                .font(.system(size: 11, weight: .semibold))
+                .font(.system(size: 10, weight: .semibold))
             Text(label)
                 .font(.system(size: 12, weight: .semibold, design: .rounded))
                 .fixedSize()
                 .lineLimit(1)
         }
-        .foregroundColor(color)
+        .foregroundColor(color.opacity(glow ? 1.0 : 0.85))
         .fixedSize()
-        .padding(.horizontal, 13)
-        .padding(.vertical, 7)
+        .padding(.horizontal, 11)
+        .padding(.vertical, 6)
+        // Subtle fill + VisualEffect blur — same approach as toast
         .background(
             ZStack {
-                Capsule().fill(color.opacity(glow ? PanelChrome.chipFillGlow : PanelChrome.chipFillRest))
-                Capsule().fill(Material.ultraThinMaterial)
-                    .opacity(PanelChrome.chipMaterialOpacity)
+                VisualEffectView()
+                color.opacity(glow ? 0.12 : 0.06)
             }
         )
+        .clipShape(Capsule())
         .overlay(
             Capsule()
-                .stroke(color.opacity(glow ? PanelChrome.chipStrokeGlow : PanelChrome.chipStrokeRest), lineWidth: glow ? 1.25 : 1)
+                .stroke(color.opacity(glow ? 0.45 : 0.20), lineWidth: 1)
         )
-        .shadow(color: color.opacity(glow ? PanelChrome.chipShadowGlow : 0), radius: glow ? PanelChrome.chipShadowRadius : 0, y: 0)
-        .scaleEffect(glow ? 1.01 : 1)
-        .animation(.easeOut(duration: 0.18), value: glow)
+        .shadow(
+            color: color.opacity(glow ? 0.18 : 0),
+            radius: glow ? 4 : 0,
+            y: glow ? 1 : 0
+        )
+        .scaleEffect(glow ? 1.02 : 1.0)
+        .animation(.easeOut(duration: 0.16), value: glow)
         .modifier(SwipeChipModifier(kind: kind))
     }
 
-    private func chipColor(kind: ChipSwipeKind) -> Color {
+    private func chipColor(kind: ChipKind) -> Color {
         switch kind {
         case .priority: return priorityColor(for: displayPriority)
         case .date, .time: return PanelChrome.dateTime
@@ -160,29 +179,28 @@ struct ChipsView: View {
 
     private func priorityColor(for p: Int) -> Color {
         switch p {
-        case 1: return PanelChrome.priorityHigh
-        case 5: return PanelChrome.priorityMed
+        case 1:  return PanelChrome.priorityHigh
+        case 5:  return PanelChrome.priorityMed
         default: return PanelChrome.priorityLow
         }
     }
 }
 
-private struct SwipeChipModifier: ViewModifier {
-    let kind: ChipSwipeKind
+// MARK: - Swipe modifier (iOS only)
 
+private struct SwipeChipModifier: ViewModifier {
+    let kind: ChipKind
     func body(content: Content) -> some View {
         #if os(iOS)
-        content
-            .gesture(
-                DragGesture(minimumDistance: 24)
-                    .onEnded { v in
-                        if v.translation.width < -40 {
-                            NotificationCenter.default.post(name: .chipSwipeDelete, object: nil, userInfo: ["kind": kind.rawValue])
-                        } else if v.translation.width > 40 {
-                            NotificationCenter.default.post(name: .chipSwipeDuplicate, object: nil, userInfo: ["kind": kind.rawValue])
-                        }
-                    }
-            )
+        content.gesture(
+            DragGesture(minimumDistance: 24).onEnded { v in
+                if v.translation.width < -40 {
+                    NotificationCenter.default.post(name: .chipSwipeDelete,    object: nil, userInfo: ["kind": kind.rawValue])
+                } else if v.translation.width > 40 {
+                    NotificationCenter.default.post(name: .chipSwipeDuplicate, object: nil, userInfo: ["kind": kind.rawValue])
+                }
+            }
+        )
         #else
         content
         #endif

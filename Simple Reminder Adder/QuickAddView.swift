@@ -4,31 +4,29 @@ import EventKit
 
 extension Notification.Name {
     static let quickAddTabAcceptSuggestion = Notification.Name("QuickAddTabAcceptSuggestion")
-    /// `userInfo["open"]` as Bool — list `/` picker: key routing + main panel height (expands **up**).
-    static let mainPanelListPickerLayout = Notification.Name("MainPanelListPickerLayout")
-    /// `userInfo["open"]` as Bool, `height` as CGFloat — search menu height below input (expands **down**).
-    static let mainPanelSearchLayout = Notification.Name("MainPanelSearchLayout")
-    /// `userInfo["delta"]` as Int (+1 down, -1 up) to move list picker selection.
-    static let listPickerNavigate = Notification.Name("ListPickerNavigate")
-    static let listPickerConfirm = Notification.Name("ListPickerConfirm")
-    static let listPickerCancel = Notification.Name("ListPickerCancel")
-    static let quickAddShiftReturnSave = Notification.Name("QuickAddShiftReturnSave")
-
-    static let searchHotkeyToggle = Notification.Name("SearchHotkeyToggle")
-    /// `userInfo["active"]` as Bool — search mode (⌘F); AppDelegate hides chips and resizes for the search menu.
-    static let searchModePresence = Notification.Name("SearchModePresence")
-    static let searchResultActivate = Notification.Name("SearchResultActivate")
-    static let forceExitSearchMode = Notification.Name("ForceExitSearchMode")
-
-    static let chipPrioritySliderCommit = Notification.Name("ChipPrioritySliderCommit")
-    static let chipSwipeDelete = Notification.Name("ChipSwipeDelete")
-    static let chipSwipeDuplicate = Notification.Name("ChipSwipeDuplicate")
-    static let chipsLayoutChanged = Notification.Name("ChipsLayoutChanged")
+    static let mainPanelListPickerLayout   = Notification.Name("MainPanelListPickerLayout")
+    static let mainPanelSearchLayout       = Notification.Name("MainPanelSearchLayout")
+    static let listPickerNavigate          = Notification.Name("ListPickerNavigate")
+    static let listPickerConfirm           = Notification.Name("ListPickerConfirm")
+    static let listPickerCancel            = Notification.Name("ListPickerCancel")
+    static let quickAddShiftReturnSave     = Notification.Name("QuickAddShiftReturnSave")
+    static let searchHotkeyToggle          = Notification.Name("SearchHotkeyToggle")
+    static let searchModePresence          = Notification.Name("SearchModePresence")
+    static let searchResultActivate        = Notification.Name("SearchResultActivate")
+    static let forceExitSearchMode         = Notification.Name("ForceExitSearchMode")
+    static let chipPrioritySliderCommit    = Notification.Name("ChipPrioritySliderCommit")
+    static let chipSwipeDelete             = Notification.Name("ChipSwipeDelete")
+    static let chipSwipeDuplicate          = Notification.Name("ChipSwipeDuplicate")
+    static let chipsLayoutChanged          = Notification.Name("ChipsLayoutChanged")
 }
 
+// MARK: - ChipSet
+// BUG FIX: was `hasDate: Bool` — storing only a bool meant changing "at 5pm" → "at 6pm"
+// left hasDate==true both times, so postIfChipsChanged() saw no diff and skipped the notification.
+// Now stores the actual Date? so any time-value change triggers a re-render.
 private struct ChipSet: Equatable {
     var priority: Int
-    var hasDate: Bool
+    var date: Date?
     var showDatePill: Bool
     var showTimePill: Bool
     var listName: String?
@@ -45,15 +43,15 @@ struct QuickAddView: View {
     @State private var lists: [EKCalendar] = []
     @FocusState private var isInputFocused: Bool
 
-    @State private var parsedDate: Date? = nil
+    @State private var parsedDate: Date?        = nil
     @State private var parsedDateString: String? = nil
-    @State private var parsedList: EKCalendar? = nil
+    @State private var parsedList: EKCalendar?  = nil
     @State private var parsedListString: String? = nil
-    @State private var parsedPriority: Int = 0
+    @State private var parsedPriority: Int      = 0
     @State private var parsedPriorityString: String? = nil
 
     @State private var suggestion: String = ""
-    @State private var lastPostedChipSet = ChipSet(priority: 0, hasDate: false, showDatePill: false, showTimePill: false, listName: nil)
+    @State private var lastPostedChipSet = ChipSet(priority: 0, date: nil, showDatePill: false, showTimePill: false, listName: nil)
 
     @State private var showDatePill: Bool = false
     @State private var showTimePill: Bool = false
@@ -107,12 +105,12 @@ struct QuickAddView: View {
                     .onChange(of: taskText) { _, new in
                         handleTaskTextChange(new)
                     }
-            .onChange(of: isSearchMode) { _, active in
-                handleSearchModeChange(active)
-            }
-            .onChange(of: searchHitRows.count) { _, _ in
-                if isSearchMode { postMainPanelSearchLayout() }
-            }
+                    .onChange(of: isSearchMode) { _, active in
+                        handleSearchModeChange(active)
+                    }
+                    .onChange(of: searchHitRows.count) { _, _ in
+                        if isSearchMode { postMainPanelSearchLayout() }
+                    }
                     .onAppear {
                         requestPermissionsAndFetchLists()
                         isInputFocused = true
@@ -121,11 +119,8 @@ struct QuickAddView: View {
                         handlePanelDidOpen()
                     }
                     .onReceive(NotificationCenter.default.publisher(for: .quickAddTabAcceptSuggestion)) { _ in
-                        if slashQuery != nil {
-                            moveListSelection(delta: 1)
-                        } else {
-                            acceptSuggestion()
-                        }
+                        if slashQuery != nil { moveListSelection(delta: 1) }
+                        else { acceptSuggestion() }
                     }
                     .onReceive(NotificationCenter.default.publisher(for: .listPickerNavigate)) { note in
                         guard slashQuery != nil, let d = note.userInfo?["delta"] as? Int else { return }
@@ -164,7 +159,7 @@ struct QuickAddView: View {
             parsedPriority = v
             applyPriorityPrefixToTaskText()
             parseText()
-            postIfChipsChanged()
+            postChipState()
         }
         .onReceive(NotificationCenter.default.publisher(for: .chipSwipeDelete)) { note in
             guard let k = note.userInfo?["kind"] as? String else { return }
@@ -175,6 +170,8 @@ struct QuickAddView: View {
             applyChipSwipeDuplicate(kind: k)
         }
     }
+
+    // MARK: - Body
 
     private var mainContent: some View {
         VStack(spacing: listPickerSpacing) {
@@ -189,7 +186,7 @@ struct QuickAddView: View {
                 .transition(
                     .asymmetric(
                         insertion: .opacity.combined(with: .move(edge: .bottom)),
-                        removal: .opacity.combined(with: .move(edge: .top))
+                        removal:   .opacity.combined(with: .move(edge: .top))
                     )
                 )
             }
@@ -203,13 +200,13 @@ struct QuickAddView: View {
                     .transition(
                         .asymmetric(
                             insertion: .opacity.combined(with: .move(edge: .top)),
-                            removal: .opacity.combined(with: .move(edge: .bottom))
+                            removal:   .opacity.combined(with: .move(edge: .bottom))
                         )
                     )
             }
         }
-        .animation(.spring(response: 0.28, dampingFraction: 0.9), value: slashQuery != nil)
-        .animation(.spring(response: 0.28, dampingFraction: 0.9), value: isSearchMode)
+        .animation(.spring(response: 0.28, dampingFraction: 0.9),  value: slashQuery != nil)
+        .animation(.spring(response: 0.28, dampingFraction: 0.9),  value: isSearchMode)
         .animation(.spring(response: 0.26, dampingFraction: 0.92), value: searchHitRows.count)
         .padding(.bottom, slashQuery != nil ? 4 : 0)
         .background(
@@ -223,7 +220,7 @@ struct QuickAddView: View {
     }
 
     // MARK: - Handlers
-    
+
     private func handleTaskTextChange(_ new: String) {
         let open = !isSearchMode && (listSlashQuery(from: new) != nil)
         if open != listPickerLayoutOpenState {
@@ -239,9 +236,7 @@ struct QuickAddView: View {
         parseText()
         updateSuggestion()
         postIfChipsChanged()
-        if isSearchMode {
-            scheduleSearchRefresh()
-        }
+        if isSearchMode { scheduleSearchRefresh() }
     }
 
     private func handleSearchModeChange(_ active: Bool) {
@@ -285,37 +280,32 @@ struct QuickAddView: View {
         return min(max(0, listPickerIndex), n - 1)
     }
 
+    // MARK: - Input bar
+
     private var inputBarContent: some View {
         ZStack(alignment: .leading) {
             if taskText.isEmpty && slashQuery == nil {
                 Text(
                     isSearchMode
                         ? "Search reminders…  ·  ⌘F to close"
-                        : "Task…  ·  ⌘F search  ·  ⇧⏎ save & keep adding  ·  space + / for lists"
+                        : "Task…  ·  ⌘F search  ·  ⇧⏎ save & keep  ·  space + / for lists"
                 )
-                    .font(.system(size: 18, weight: .light, design: .rounded))
-                    .foregroundColor(.primary.opacity(0.22))
-                    .allowsHitTesting(false)
-                    .padding(.horizontal, 22)
+                .font(.system(size: 18, weight: .light, design: .rounded))
+                .foregroundColor(.primary.opacity(0.22))
+                .allowsHitTesting(false)
+                .padding(.horizontal, 22)
             }
 
             if !suggestion.isEmpty && !taskText.isEmpty && slashQuery == nil && !isSearchMode {
-                Text(taskText + suggestion)
-                    .font(.system(size: 20, weight: .light, design: .rounded))
-                    .foregroundColor(.clear)
-                    .overlay(
-                        GeometryReader { _ in
-                            Text(taskText)
-                                .font(.system(size: 20, weight: .light, design: .rounded))
-                                .foregroundColor(.clear)
-                            +
-                            Text(suggestion)
-                                .font(.system(size: 20, weight: .light, design: .rounded))
-                                .foregroundColor(.primary.opacity(0.25))
-                        }
-                    )
-                    .allowsHitTesting(false)
-                    .padding(.horizontal, 22)
+                HStack(spacing: 0) {
+                    Text(taskText)
+                        .foregroundColor(.clear)
+                    Text(suggestion)
+                        .foregroundColor(.primary.opacity(0.22))
+                }
+                .font(.system(size: 20, weight: .light, design: .rounded))
+                .allowsHitTesting(false)
+                .padding(.horizontal, 22)
             }
 
             Text(styledText(from: taskText))
@@ -330,9 +320,7 @@ struct QuickAddView: View {
                 .tint(.primary.opacity(0.6))
                 .focused($isInputFocused)
                 .onSubmit {
-                    if !isSearchMode {
-                        saveTask(keepPanelOpen: false)
-                    }
+                    if !isSearchMode { saveTask(keepPanelOpen: false) }
                 }
                 .padding(.horizontal, 22)
         }
@@ -343,47 +331,40 @@ struct QuickAddView: View {
                     ForEach(0..<min(dripSessionCount, 6), id: \.self) { _ in
                         Image(systemName: "checkmark.circle.fill")
                             .font(.system(size: 11))
-                            .foregroundStyle(.secondary.opacity(0.55))
+                            .foregroundStyle(.secondary.opacity(0.5))
                     }
                     if dripSessionCount > 6 {
                         Text("+\(dripSessionCount - 6)")
                             .font(.system(size: 10, weight: .semibold, design: .rounded))
-                            .foregroundStyle(.secondary.opacity(0.6))
+                            .foregroundStyle(.secondary.opacity(0.55))
                     }
                 }
                 .padding(.trailing, 14)
+                .transition(.opacity.combined(with: .scale(scale: 0.8)))
+                .animation(.spring(response: 0.3, dampingFraction: 0.7), value: dripSessionCount)
             }
         }
     }
 
     // MARK: - `/` list picker
 
-    /// Slash list mode: `/` at start or after whitespace; `http://` is ignored (no whitespace before last `/`).
     private func listSlashQuery(from text: String) -> (base: String, filter: String)? {
         guard let slashIdx = text.lastIndex(of: "/") else { return nil }
         if slashIdx > text.startIndex {
             let prev = text[text.index(before: slashIdx)]
             if !prev.isWhitespace { return nil }
         }
-        let base = String(text[..<slashIdx]).trimmingCharacters(in: .whitespaces)
-        let after = text.index(after: slashIdx)
+        let base   = String(text[..<slashIdx]).trimmingCharacters(in: .whitespaces)
+        let after  = text.index(after: slashIdx)
         let filter = after < text.endIndex ? String(text[after...]) : ""
         return (base, filter.lowercased())
     }
 
     private func syncListPickerAfterTextChange(_ newText: String) {
-        if isSearchMode {
-            listPickerIndex = 0
-            return
-        }
-        guard listSlashQuery(from: newText) != nil else {
-            listPickerIndex = 0
-            return
-        }
-        let n = lists.filter { cal in
-            let f = listSlashQuery(from: newText)?.filter ?? ""
-            return f.isEmpty || cal.title.lowercased().contains(f)
-        }.count
+        if isSearchMode { listPickerIndex = 0; return }
+        guard listSlashQuery(from: newText) != nil else { listPickerIndex = 0; return }
+        let f  = listSlashQuery(from: newText)?.filter ?? ""
+        let n  = lists.filter { f.isEmpty || $0.title.lowercased().contains(f) }.count
         if listPickerIndex >= n { listPickerIndex = max(0, n - 1) }
     }
 
@@ -397,10 +378,9 @@ struct QuickAddView: View {
         guard let q = slashQuery else { return }
         let rows = filteredListsForPicker
         guard index >= 0, index < rows.count else { return }
-        let title = rows[index].title
+        let title  = rows[index].title
         let spacer = q.base.isEmpty ? "" : (q.base.hasSuffix(" ") ? "" : " ")
-        let prefix = q.base + spacer
-        taskText = prefix + "in \(title) "
+        taskText   = q.base + spacer + "in \(title) "
         listPickerIndex = 0
     }
 
@@ -410,7 +390,7 @@ struct QuickAddView: View {
         listPickerIndex = 0
     }
 
-    // MARK: - Ghost text / suggestion
+    // MARK: - Ghost suggestion
 
     private func updateSuggestion() {
         suggestion = ""
@@ -420,26 +400,21 @@ struct QuickAddView: View {
         let lower = taskText.lowercased()
 
         let timePatterns: [(trigger: String, completion: String)] = [
-            ("at ", "5:00 PM"),
-            ("tod", "ay at 5:00 PM"),
-            ("tom", "orrow at 9:00 AM"),
-            ("thi", "s evening at 7:00 PM"),
-            ("nex", "t Monday at 9:00 AM"),
-            ("on ", "Monday at 9:00 AM"),
+            ("at ",  "5:00 PM"),
+            ("tod",  "ay at 5:00 PM"),
+            ("tom",  "orrow at 9:00 AM"),
+            ("thi",  "s evening at 7:00 PM"),
+            ("nex",  "t Monday at 9:00 AM"),
+            ("on ",  "Monday at 9:00 AM"),
         ]
         for (trigger, completion) in timePatterns {
-            if lower.hasSuffix(trigger) {
-                suggestion = completion
-                return
-            }
+            if lower.hasSuffix(trigger) { suggestion = completion; return }
         }
 
         let listTriggers = ["in ", "to "]
         for trigger in listTriggers {
             if lower.hasSuffix(trigger) {
-                if let firstName = lists.first?.title {
-                    suggestion = firstName
-                }
+                if let firstName = lists.first?.title { suggestion = firstName }
                 return
             }
             for list in lists {
@@ -455,16 +430,12 @@ struct QuickAddView: View {
             }
         }
 
-        if taskText == "!" {
-            suggestion = "! task name  (!! medium, !!! high)"
-            return
-        }
+        if taskText == "!" { suggestion = "! task name  (!! medium, !!! high)"; return }
     }
 
     func acceptSuggestion() {
-        guard !isSearchMode else { return }
-        guard !suggestion.isEmpty else { return }
-        taskText += suggestion
+        guard !isSearchMode, !suggestion.isEmpty else { return }
+        taskText  += suggestion
         suggestion = ""
         parseText()
         postIfChipsChanged()
@@ -474,15 +445,17 @@ struct QuickAddView: View {
 
     private func postIfChipsChanged() {
         if isSearchMode {
-            let cleared = ChipSet(priority: 0, hasDate: false, showDatePill: false, showTimePill: false, listName: nil)
+            let cleared = ChipSet(priority: 0, date: nil, showDatePill: false, showTimePill: false, listName: nil)
             guard cleared != lastPostedChipSet else { return }
             lastPostedChipSet = cleared
             postChipState()
             return
         }
+        // BUG FIX: use actual `date: Date?` so a time-only change (5pm→6pm)
+        // still registers as a different ChipSet and triggers a re-render.
         let current = ChipSet(
             priority: parsedPriority,
-            hasDate: parsedDate != nil,
+            date: parsedDate,
             showDatePill: showDatePill,
             showTimePill: showTimePill,
             listName: parsedList?.title
@@ -493,23 +466,22 @@ struct QuickAddView: View {
     }
 
     private func forcePostChipState() {
-        postChipState()
+        lastPostedChipSet = ChipSet(priority: -1, date: nil, showDatePill: false, showTimePill: false, listName: nil)
+        postIfChipsChanged()
     }
 
     private func postChipState() {
-        let glowDate = showDatePill && parsedDate != nil
-        let glowTime = showTimePill && parsedDate != nil
         NotificationCenter.default.post(
             name: NSNotification.Name("ParsedStateChanged"),
             object: nil,
             userInfo: [
-                "date": parsedDate as Any,
-                "list": parsedList?.title as Any,
-                "priority": parsedPriority,
+                "date":         parsedDate as Any,
+                "list":         parsedList?.title as Any,
+                "priority":     parsedPriority,
                 "showDatePill": showDatePill,
                 "showTimePill": showTimePill,
-                "glowDate": glowDate,
-                "glowTime": glowTime,
+                "glowDate":     showDatePill && parsedDate != nil,
+                "glowTime":     showTimePill && parsedDate != nil,
             ]
         )
     }
@@ -518,8 +490,8 @@ struct QuickAddView: View {
 
     private func priorityColor() -> Color {
         switch parsedPriority {
-        case 1: return PanelChrome.priorityHigh
-        case 5: return PanelChrome.priorityMed
+        case 1:  return PanelChrome.priorityHigh
+        case 5:  return PanelChrome.priorityMed
         default: return PanelChrome.priorityLow
         }
     }
@@ -548,38 +520,33 @@ struct QuickAddView: View {
 
     private func parseText() {
         if isSearchMode {
-            parsedDate = nil
-            parsedDateString = nil
-            parsedList = nil
-            parsedListString = nil
-            parsedPriority = 0
-            parsedPriorityString = nil
-            showDatePill = false
-            showTimePill = false
+            parsedDate = nil; parsedDateString = nil
+            parsedList = nil; parsedListString = nil
+            parsedPriority = 0; parsedPriorityString = nil
+            showDatePill = false; showTimePill = false
             return
         }
         parsedDate = nil; parsedDateString = nil
         parsedList = nil; parsedListString = nil
         parsedPriority = 0; parsedPriorityString = nil
-        showDatePill = false
-        showTimePill = false
+        showDatePill = false; showTimePill = false
         guard !taskText.isEmpty else { return }
 
-        if taskText.hasPrefix("!!!") { parsedPriority = 1; parsedPriorityString = "!!!" }
-        else if taskText.hasPrefix("!!") { parsedPriority = 5; parsedPriorityString = "!!" }
-        else if taskText.hasPrefix("!") { parsedPriority = 9; parsedPriorityString = "!" }
+        if      taskText.hasPrefix("!!!") { parsedPriority = 1; parsedPriorityString = "!!!" }
+        else if taskText.hasPrefix("!!")  { parsedPriority = 5; parsedPriorityString = "!!" }
+        else if taskText.hasPrefix("!")   { parsedPriority = 9; parsedPriorityString = "!" }
 
         for list in lists {
             let pattern = "(?i)\\b(?:in|to)\\s+\\Q\(list.title)\\E\\b"
             if let range = taskText.range(of: pattern, options: .regularExpression) {
-                parsedList = list
+                parsedList       = list
                 parsedListString = String(taskText[range])
                 break
             }
         }
 
         let nd = NaturalDateParser.parse(text: taskText)
-        parsedDate = nd.date
+        parsedDate       = nd.date
         parsedDateString = nd.matchedSubstring
         if nd.date != nil {
             showDatePill = nd.hasDateComponent
@@ -590,19 +557,19 @@ struct QuickAddView: View {
 
     private func applyPriorityPrefixToTaskText() {
         var t = taskText
-        while t.first == "!" {
-            t.removeFirst()
-        }
+        while t.first == "!" { t.removeFirst() }
         t = t.trimmingCharacters(in: .whitespaces)
         let prefix: String
         switch parsedPriority {
-        case 1: prefix = "!!!"
-        case 5: prefix = "!!"
-        case 9: prefix = "!"
+        case 1:  prefix = "!!!"
+        case 5:  prefix = "!!"
+        case 9:  prefix = "!"
         default: prefix = ""
         }
         taskText = prefix.isEmpty ? t : (t.isEmpty ? prefix : prefix + " " + t)
     }
+
+    // MARK: - Chip swipe actions
 
     private func applyChipSwipeDelete(kind: String) {
         switch kind {
@@ -612,12 +579,14 @@ struct QuickAddView: View {
             taskText = t.trimmingCharacters(in: .whitespaces)
         case "date", "time":
             if let s = parsedDateString {
-                taskText = taskText.replacingOccurrences(of: s, with: "", options: .caseInsensitive)
+                taskText = taskText
+                    .replacingOccurrences(of: s, with: "", options: .caseInsensitive)
                     .trimmingCharacters(in: .whitespacesAndNewlines)
             }
         case "list":
             if let s = parsedListString {
-                taskText = taskText.replacingOccurrences(of: s, with: "", options: .caseInsensitive)
+                taskText = taskText
+                    .replacingOccurrences(of: s, with: "", options: .caseInsensitive)
                     .trimmingCharacters(in: .whitespacesAndNewlines)
             }
         default: break
@@ -629,21 +598,23 @@ struct QuickAddView: View {
     private func applyChipSwipeDuplicate(kind: String) {
         switch kind {
         case "list":
-            if let s = parsedListString {
-                let extra = " " + s
-                if taskText.range(of: extra, options: .caseInsensitive) == nil {
-                    taskText = taskText.trimmingCharacters(in: .whitespacesAndNewlines) + extra
-                }
+            if let s = parsedListString,
+               taskText.range(of: s, options: .caseInsensitive) == nil {
+                taskText = taskText.trimmingCharacters(in: .whitespacesAndNewlines) + " " + s
             }
         case "date", "time":
             if let s = parsedDateString {
                 taskText = taskText.trimmingCharacters(in: .whitespacesAndNewlines) + " " + s
             }
         case "priority":
+            // BUG FIX: was `else { taskText = "!!!" }` so swipe-right on High did nothing.
+            // Now cycles: Low(9)→Medium(5)→High(1)→Low(9)
             let body = String(taskText.drop(while: { $0 == "!" })).trimmingCharacters(in: .whitespaces)
-            if parsedPriority == 9 { taskText = "!! " + body }
-            else if parsedPriority == 5 { taskText = "!!! " + body }
-            else { taskText = "!!! " + body }
+            switch parsedPriority {
+            case 9:  taskText = "!! " + body   // low  → medium
+            case 5:  taskText = "!!! " + body  // medium → high
+            default: taskText = "! " + body    // high  → low
+            }
         default: break
         }
         parseText()
@@ -656,6 +627,7 @@ struct QuickAddView: View {
         guard !isSearchMode else { return }
         guard slashQuery == nil else { return }
         guard !taskText.isEmpty else { return }
+
         var cleanTitle = taskText
         if let s = parsedPriorityString { cleanTitle = cleanTitle.replacingOccurrences(of: s, with: "") }
         if let s = parsedDateString     { cleanTitle = cleanTitle.replacingOccurrences(of: s, with: "", options: .caseInsensitive) }
@@ -663,7 +635,7 @@ struct QuickAddView: View {
         cleanTitle = cleanTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         if cleanTitle.isEmpty { cleanTitle = "New Task" }
 
-        let dest = parsedList ?? eventStore.defaultCalendarForNewReminders()
+        let dest     = parsedList ?? eventStore.defaultCalendarForNewReminders()
         let reminder = EKReminder(eventStore: eventStore)
         reminder.title = cleanTitle
         if let dest { reminder.calendar = dest }
@@ -680,35 +652,33 @@ struct QuickAddView: View {
             return
         }
 
-        let finalTitle = cleanTitle
+        let finalTitle     = cleanTitle
         let finalListTitle = dest?.title ?? "Reminders"
-        var finalDateFormatted: String? = nil
+        var finalDateFmt: String?
         if let d = parsedDate {
             let fmt = DateFormatter(); fmt.dateStyle = .short; fmt.timeStyle = .short
-            finalDateFormatted = fmt.string(from: d)
+            finalDateFmt = fmt.string(from: d)
         }
 
         if keepPanelOpen {
             dripSessionCount += 1
-            withAnimation(.spring(response: 0.32, dampingFraction: 0.78)) {
-                taskText = ""
-            }
+            withAnimation(.spring(response: 0.32, dampingFraction: 0.78)) { taskText = "" }
         } else {
             taskText = ""
             dripSessionCount = 0
         }
         suggestion = ""
         parseText()
-        lastPostedChipSet = ChipSet(priority: 0, hasDate: false, showDatePill: false, showTimePill: false, listName: nil)
+        lastPostedChipSet = ChipSet(priority: 0, date: nil, showDatePill: false, showTimePill: false, listName: nil)
         postChipState()
 
         NotificationCenter.default.post(
             name: NSNotification.Name("TaskSaved"),
             object: nil,
             userInfo: [
-                "title": finalTitle,
-                "list": finalListTitle,
-                "date": finalDateFormatted ?? "",
+                "title":         finalTitle,
+                "list":          finalListTitle,
+                "date":          finalDateFmt ?? "",
                 "keepPanelOpen": keepPanelOpen,
             ]
         )
@@ -746,11 +716,9 @@ struct QuickAddView: View {
         let query = taskText
         searchDebounceTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 220_000_000)
-            guard !Task.isCancelled else { return }
-            guard isSearchMode else { return }
+            guard !Task.isCancelled, isSearchMode else { return }
             let hits = await fetchMatchingReminders(query: query)
-            guard !Task.isCancelled else { return }
-            guard isSearchMode else { return }
+            guard !Task.isCancelled, isSearchMode else { return }
             searchHitRows = hits.map {
                 SearchHitRowModel(id: $0.calendarItemIdentifier, title: $0.title, subtitle: reminderSubtitle(for: $0))
             }
@@ -761,29 +729,23 @@ struct QuickAddView: View {
     private func fetchMatchingReminders(query: String) async -> [EKReminder] {
         await withCheckedContinuation { continuation in
             let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-            let cals = eventStore.calendars(for: .reminder)
+            let cals    = eventStore.calendars(for: .reminder)
             guard !trimmed.isEmpty, !cals.isEmpty else {
-                continuation.resume(returning: [])
-                return
+                continuation.resume(returning: []); return
             }
-            let now = Date()
+            let now   = Date()
             guard let start = Calendar.current.date(byAdding: .year, value: -2, to: now),
-                  let end = Calendar.current.date(byAdding: .year, value: 2, to: now) else {
-                continuation.resume(returning: [])
-                return
+                  let end   = Calendar.current.date(byAdding: .year, value: 2,  to: now) else {
+                continuation.resume(returning: []); return
             }
             let predicate = eventStore.predicateForIncompleteReminders(withDueDateStarting: start, ending: end, calendars: cals)
             eventStore.fetchReminders(matching: predicate) { reminders in
-                let parts = trimmed.lowercased().split(separator: " ").map(String.init)
+                let parts   = trimmed.lowercased().split(separator: " ").map(String.init)
                 let matched = (reminders ?? []).filter { r in
                     let hay = (r.title + " " + (r.notes ?? "")).lowercased()
                     return parts.allSatisfy { hay.contains($0) }
-                }
-                .prefix(35)
-                let result = Array(matched)
-                DispatchQueue.main.async {
-                    continuation.resume(returning: result)
-                }
+                }.prefix(35)
+                DispatchQueue.main.async { continuation.resume(returning: Array(matched)) }
             }
         }
     }
@@ -791,22 +753,17 @@ struct QuickAddView: View {
     private func reminderSubtitle(for reminder: EKReminder) -> String {
         let list = reminder.calendar?.title ?? ""
         if let due = reminder.dueDateComponents, let date = Calendar.current.date(from: due) {
-            let fmt = DateFormatter()
-            fmt.dateStyle = .short
-            fmt.timeStyle = .short
-            let when = fmt.string(from: date)
-            return [list, when].filter { !$0.isEmpty }.joined(separator: " · ")
+            let fmt = DateFormatter(); fmt.dateStyle = .short; fmt.timeStyle = .short
+            return [list, fmt.string(from: date)].filter { !$0.isEmpty }.joined(separator: " · ")
         }
         return list
     }
 
     private func openReminderInRemindersApp(id: String) {
         guard (eventStore.calendarItem(withIdentifier: id) as? EKReminder) != nil else {
-            NSSound.beep()
-            return
+            NSSound.beep(); return
         }
-        let url = URL(fileURLWithPath: "/System/Applications/Reminders.app")
-        NSWorkspace.shared.open(url)
+        NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Reminders.app"))
     }
 
     private func requestPermissionsAndFetchLists() {
@@ -820,12 +777,14 @@ struct QuickAddView: View {
     }
 }
 
+// MARK: - VisualEffectView
+
 struct VisualEffectView: NSViewRepresentable {
     func makeNSView(context: Context) -> NSVisualEffectView {
         let v = NSVisualEffectView()
-        v.material = .popover
+        v.material     = .popover
         v.blendingMode = .behindWindow
-        v.state = .active
+        v.state        = .active
         return v
     }
     func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
