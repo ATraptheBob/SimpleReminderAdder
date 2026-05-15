@@ -35,12 +35,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private let mainPanelListPickerExpandedHeight: CGFloat = 296
 
     // Current parsed state driving the chips panel
-    private var chipsState: (priority: Int, date: Date?, listName: String?) = (0, nil, nil)
+    private var chipsState: (
+        priority: Int,
+        date: Date?,
+        listName: String?,
+        showDatePill: Bool,
+        showTimePill: Bool,
+        glowDate: Bool,
+        glowTime: Bool
+    ) = (0, nil, nil, false, false, false, false)
 
-    private var searchResultsPanel: FloatingPanel?
+    private let chipsOverlayState = ChipsOverlayState()
+
     private var searchModeIsOpen: Bool = false
-    private var searchHitRows: [SearchHitRowModel] = []
-    private var searchSyncGeneration: UInt64 = 0
+    /// Main panel grew downward for the in-window search menu; undo with `origin` on hide.
+    private var mainPanelUsesSearchExpansion: Bool = false
+
+    private var isClosingPanel = false
+    private var panelMotionToken: UInt64 = 0
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         panel = FloatingPanel(contentRect: NSRect(x: 0, y: 0, width: 580, height: 58))
@@ -62,7 +74,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let priority  = info["priority"]    as? Int    ?? 0
             let date      = info["date"]        as? Date
             let listName  = info["list"]        as? String
-            self.chipsState = (priority, date, listName)
+            let showDatePill = info["showDatePill"] as? Bool ?? false
+            let showTimePill = info["showTimePill"] as? Bool ?? false
+            let glowDate = info["glowDate"] as? Bool ?? false
+            let glowTime = info["glowTime"] as? Bool ?? false
+            self.chipsState = (priority, date, listName, showDatePill, showTimePill, glowDate, glowTime)
             self.syncChipsPanel()
         }
 
@@ -101,29 +117,26 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         ) { [weak self] note in
             guard let self else { return }
             self.searchModeIsOpen = (note.userInfo?["active"] as? Bool) == true
-            if !self.searchModeIsOpen {
-                self.searchHitRows = []
-            }
             self.syncChipsPanel()
-            self.syncSearchResultsPanel()
         }
 
         NotificationCenter.default.addObserver(
-            forName: .searchResultsUpdated,
+            forName: .mainPanelSearchLayout,
             object: nil,
             queue: .main
         ) { [weak self] note in
             guard let self else { return }
-            if let raw = note.userInfo?["hits"] as? [[String: Any]] {
-                self.searchHitRows = raw.compactMap { dict in
-                    guard let id = dict["id"] as? String, let title = dict["title"] as? String else { return nil }
-                    let sub = dict["subtitle"] as? String ?? ""
-                    return SearchHitRowModel(id: id, title: title, subtitle: sub)
-                }
-            } else {
-                self.searchHitRows = []
-            }
-            self.syncSearchResultsPanel()
+            let open = (note.userInfo?["open"] as? Bool) == true
+            let h = note.userInfo?["height"] as? CGFloat ?? 0
+            self.resizeMainPanelForSearchLayout(open: open, auxiliaryHeight: h)
+        }
+
+        NotificationCenter.default.addObserver(
+            forName: .chipsLayoutChanged,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.syncChipsPanel()
         }
 
         showPanel()
@@ -136,15 +149,66 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func showPanel() {
+        panelMotionToken += 1
+        let openTok = panelMotionToken
+        isClosingPanel = false
+
+        if let m = globalClickMonitor { NSEvent.removeMonitor(m); globalClickMonitor = nil }
+        if let m = localKeyMonitor { NSEvent.removeMonitor(m); localKeyMonitor = nil }
+
         if #available(macOS 14.0, *) { NSApp.activate() }
         else { NSApp.activate(ignoringOtherApps: true) }
 
+        chipsPanel?.alphaValue = 1
+
         panel.center()
         panel.makeKeyAndOrderFront(nil)
-        DispatchQueue.main.async { [weak self] in self?.syncChipsPanel() }
 
-        NotificationCenter.default.post(name: NSNotification.Name("PanelDidOpen"), object: nil)
+        panel.alphaValue = 0
+        PanelMotionBlur.setRadius(12, on: panel.contentView)
 
+        DispatchQueue.main.async { [weak self] in
+            guard let self, openTok == self.panelMotionToken else { return }
+            self.runPanelOpenMotion(token: openTok)
+        }
+    }
+
+    private func runPanelOpenMotion(token: UInt64) {
+        let main = panel.contentView
+        let duration = 0.34
+        let maxBlur: CGFloat = 12
+        let start = CFAbsoluteTimeGetCurrent()
+
+        func tick() {
+            guard token == self.panelMotionToken else { return }
+            let raw = min(1.0, (CFAbsoluteTimeGetCurrent() - start) / duration)
+            let t = easeOutCubic(CGFloat(raw))
+            self.panel.alphaValue = CGFloat(t)
+            PanelMotionBlur.setRadius(maxBlur * (1 - t), on: main)
+            if raw < 1 {
+                DispatchQueue.main.async(execute: tick)
+            } else {
+                guard token == self.panelMotionToken else { return }
+                self.panel.alphaValue = 1
+                PanelMotionBlur.setRadius(0, on: main)
+                self.installInputMonitors()
+                NotificationCenter.default.post(name: NSNotification.Name("PanelDidOpen"), object: nil)
+                DispatchQueue.main.async { [weak self] in self?.syncChipsPanel() }
+            }
+        }
+        tick()
+    }
+
+    private func easeOutCubic(_ t: CGFloat) -> CGFloat {
+        let u = 1 - t
+        return 1 - u * u * u
+    }
+
+    private func easeInCubic(_ t: CGFloat) -> CGFloat {
+        return t * t * t
+    }
+
+    private func installInputMonitors() {
         globalClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
             self?.hidePanel()
         }
@@ -222,21 +286,87 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func hidePanel() {
+        if mainPanelUsesSearchExpansion {
+            resizeMainPanelForSearchLayout(open: false, auxiliaryHeight: 0)
+        }
         NotificationCenter.default.post(name: .forceExitSearchMode, object: nil)
         listPickerIsOpen = false
         searchModeIsOpen = false
-        searchHitRows = []
-        searchResultsPanel?.orderOut(nil)
-        resizeMainPanelForListPicker(open: false)
+
+        if !panel.isVisible {
+            finalizePanelHide()
+            return
+        }
+
+        panelMotionToken += 1
+        let closeTok = panelMotionToken
+        isClosingPanel = true
+        panel.contentView?.wantsLayer = true
+
+        runPanelCloseMotion(token: closeTok)
+    }
+
+    private func runPanelCloseMotion(token: UInt64) {
+        let main = panel.contentView
+        let duration = 0.32
+        let maxBlur: CGFloat = 14
+        let start = CFAbsoluteTimeGetCurrent()
+
+        func tick() {
+            guard token == self.panelMotionToken else {
+                PanelMotionBlur.setRadius(0, on: main)
+                return
+            }
+            let raw = min(1.0, (CFAbsoluteTimeGetCurrent() - start) / duration)
+            let t = easeInCubic(CGFloat(raw))
+            self.panel.alphaValue = 1 - CGFloat(t)
+            self.chipsPanel?.alphaValue = 1 - CGFloat(t)
+            PanelMotionBlur.setRadius(maxBlur * t, on: main)
+            if raw < 1 {
+                DispatchQueue.main.async(execute: tick)
+            } else {
+                guard token == self.panelMotionToken else {
+                    PanelMotionBlur.setRadius(0, on: main)
+                    return
+                }
+                if self.isClosingPanel {
+                    self.isClosingPanel = false
+                    PanelMotionBlur.setRadius(0, on: main)
+                    self.finalizePanelHide()
+                } else {
+                    self.panel.alphaValue = 1
+                    self.chipsPanel?.alphaValue = 1
+                    PanelMotionBlur.setRadius(0, on: main)
+                }
+            }
+        }
+        tick()
+    }
+
+    private func finalizePanelHide() {
+        chipsOverlayState.priorityExpanded = false
+        PanelMotionBlur.setRadius(0, on: panel.contentView)
+        if mainPanelUsesSearchExpansion {
+            var f = panel.frame
+            let dh = mainPanelCollapsedHeight - f.size.height
+            f.size.height = mainPanelCollapsedHeight
+            f.origin.y -= dh
+            panel.setFrame(f, display: true, animate: false)
+            mainPanelUsesSearchExpansion = false
+        } else {
+            resizeMainPanelForListPicker(open: false)
+        }
         panel.orderOut(nil)
+        panel.alphaValue = 1
         chipsPanel?.orderOut(nil)
+        chipsPanel?.alphaValue = 1
         if let m = globalClickMonitor { NSEvent.removeMonitor(m); globalClickMonitor = nil }
-        if let m = localKeyMonitor    { NSEvent.removeMonitor(m); localKeyMonitor = nil }
-        // Reset chips state for next open
-        chipsState = (0, nil, nil)
+        if let m = localKeyMonitor { NSEvent.removeMonitor(m); localKeyMonitor = nil }
+        chipsState = (0, nil, nil, false, false, false, false)
     }
 
     private func resizeMainPanelForListPicker(open: Bool) {
+        mainPanelUsesSearchExpansion = false
         let newH = open ? mainPanelListPickerExpandedHeight : mainPanelCollapsedHeight
         var f = panel.frame
         guard abs(f.size.height - newH) > 0.5 else {
@@ -244,6 +374,29 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         f.size.height = newH
+        panel.setFrame(f, display: true, animate: false)
+        DispatchQueue.main.async { [weak self] in self?.syncChipsPanel() }
+    }
+
+    private func resizeMainPanelForSearchLayout(open: Bool, auxiliaryHeight: CGFloat) {
+        guard !listPickerIsOpen else { return }
+        var f = panel.frame
+        let oldH = f.size.height
+        let targetH: CGFloat
+        if open {
+            targetH = mainInputBarHeight + max(auxiliaryHeight, 72)
+            mainPanelUsesSearchExpansion = true
+        } else {
+            targetH = listPickerIsOpen ? mainPanelListPickerExpandedHeight : mainPanelCollapsedHeight
+            mainPanelUsesSearchExpansion = false
+        }
+        guard abs(targetH - oldH) > 0.5 else {
+            DispatchQueue.main.async { [weak self] in self?.syncChipsPanel() }
+            return
+        }
+        let dh = targetH - oldH
+        f.size.height = targetH
+        f.origin.y -= dh
         panel.setFrame(f, display: true, animate: false)
         DispatchQueue.main.async { [weak self] in self?.syncChipsPanel() }
     }
@@ -291,20 +444,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             // Borderless avoids titled-bar clipping that can cut off capsule bottoms with multiple chips.
             chipsPanel = FloatingPanel(
                 contentRect: .zero,
-                styleMask: [.borderless, .nonactivatingPanel]
+                styleMask: [.borderless, .nonactivatingPanel],
+                movableByBackground: false
             )
-            chipsPanel?.ignoresMouseEvents = true
+            chipsPanel?.ignoresMouseEvents = false
             chipsPanel?.level = .floating
             chipsPanel?.hasShadow = false
         }
 
         // Measure using a temp window so fittingSize is accurate
-        let chipsView = ChipsView(
+        let chipsRoot = ChipsView(
             priority: chipsState.priority,
-            date:     chipsState.date,
+            date: chipsState.date,
+            showDatePill: chipsState.showDatePill,
+            showTimePill: chipsState.showTimePill,
+            highlightDate: chipsState.glowDate,
+            highlightTime: chipsState.glowTime,
             listName: chipsState.listName
         )
-        let host = NSHostingView(rootView: chipsView)
+        .environmentObject(chipsOverlayState)
+
+        let host = NSHostingView(rootView: chipsRoot)
         host.frame = NSRect(x: 0, y: 0, width: 1600, height: 400)
         host.layoutSubtreeIfNeeded()
         let size = host.fittingSize
@@ -357,98 +517,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
                 ctx.allowsImplicitAnimation = true
                 chipsPanel?.animator().setFrame(targetFrame, display: true)
-            }
-        }
-    }
-
-    // MARK: - Search results strip
-
-    private func syncSearchResultsPanel() {
-        searchSyncGeneration += 1
-        let gen = searchSyncGeneration
-
-        guard searchModeIsOpen else {
-            if let sp = searchResultsPanel, sp.isVisible {
-                NSAnimationContext.runAnimationGroup({ ctx in
-                    ctx.duration = 0.15
-                    ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-                    ctx.allowsImplicitAnimation = true
-                    sp.animator().alphaValue = 0
-                }, completionHandler: { [weak self] in
-                    guard let self, gen == self.searchSyncGeneration else { return }
-                    sp.alphaValue = 1
-                    sp.orderOut(nil)
-                })
-            }
-            return
-        }
-
-        guard !searchHitRows.isEmpty else {
-            if let sp = searchResultsPanel, sp.isVisible {
-                sp.orderOut(nil)
-            }
-            return
-        }
-
-        if searchResultsPanel == nil {
-            searchResultsPanel = FloatingPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel])
-            searchResultsPanel?.level = .floating
-            searchResultsPanel?.hasShadow = false
-            searchResultsPanel?.backgroundColor = .clear
-            searchResultsPanel?.isOpaque = false
-        }
-
-        let strip = SearchResultsStripView(hits: searchHitRows)
-        let host = NSHostingView(rootView: strip)
-        host.frame = NSRect(x: 0, y: 0, width: 2000, height: 400)
-        host.layoutSubtreeIfNeeded()
-        let size = host.fittingSize
-        let safeSize = NSSize(width: ceil(size.width) + 12, height: ceil(size.height) + 14)
-
-        let panelFrame = panel.frame
-        let anchorX = panelFrame.midX
-        let anchorY = panelFrame.minY + mainInputBarHeight / 2
-        let gapBelowMain: CGFloat = 6
-
-        let x = anchorX - safeSize.width / 2
-        let y = panelFrame.minY - safeSize.height - gapBelowMain
-        let targetFrame = NSRect(origin: NSPoint(x: x, y: y), size: safeSize)
-
-        searchResultsPanel?.contentView = host
-        searchResultsPanel?.contentView?.clipsToBounds = false
-
-        if let sp = searchResultsPanel, sp.isVisible, sp.alphaValue < 0.999 {
-            NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = 0
-                ctx.allowsImplicitAnimation = false
-                sp.alphaValue = 1
-            }
-        }
-
-        if searchResultsPanel?.isVisible == false {
-            let startFrame = NSRect(
-                x: anchorX - safeSize.width / 2,
-                y: anchorY - safeSize.height / 2,
-                width: safeSize.width,
-                height: safeSize.height
-            )
-            searchResultsPanel?.setFrame(startFrame, display: false)
-            searchResultsPanel?.alphaValue = 0
-            searchResultsPanel?.orderFront(nil)
-
-            NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = 0.32
-                ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.22, 1.0, 0.36, 1.0)
-                ctx.allowsImplicitAnimation = true
-                searchResultsPanel?.animator().setFrame(targetFrame, display: true)
-                searchResultsPanel?.animator().alphaValue = 1
-            }
-        } else {
-            NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = 0.2
-                ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-                ctx.allowsImplicitAnimation = true
-                searchResultsPanel?.animator().setFrame(targetFrame, display: true)
             }
         }
     }

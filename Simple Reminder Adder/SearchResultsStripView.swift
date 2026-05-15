@@ -6,52 +6,70 @@ struct SearchHitRowModel: Identifiable, Hashable {
     let subtitle: String
 }
 
-/// Horizontal reminder hits shown below the quick-add bar (same band as chips).
-struct SearchResultsStripView: View {
+/// Vertical reminder hits below the quick-add field (search / “finder” menu pattern).
+struct SearchResultsMenuView: View {
     let hits: [SearchHitRowModel]
 
-    private let accent = Color(hue: 0.55, saturation: 0.45, brightness: 0.92)
-
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(hits) { hit in
-                    Button {
-                        NotificationCenter.default.post(
-                            name: .searchResultActivate,
-                            object: nil,
-                            userInfo: ["id": hit.id]
-                        )
-                    } label: {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(hit.title)
-                                .font(.system(size: 12, weight: .semibold, design: .rounded))
-                                .foregroundStyle(accent)
-                                .lineLimit(1)
-                            if !hit.subtitle.isEmpty {
-                                Text(hit.subtitle)
-                                    .font(.system(size: 10, weight: .medium, design: .rounded))
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                            }
+        Group {
+            if hits.isEmpty {
+                Text("Type to filter reminders")
+                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 14)
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 2) {
+                        ForEach(hits) { hit in
+                            row(hit)
+                                .id(hit.id)
                         }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(
-                            Capsule()
-                                .fill(accent.opacity(0.14))
-                        )
-                        .overlay(
-                            Capsule()
-                                .stroke(accent.opacity(0.35), lineWidth: 1)
-                        )
                     }
-                    .buttonStyle(.plain)
+                    .padding(.vertical, 6)
                 }
+                .frame(maxHeight: 240)
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
         }
-        .frame(maxHeight: 120)
+        .frame(minWidth: 220)
+    }
+
+    @ViewBuilder
+    private func row(_ hit: SearchHitRowModel) -> some View {
+        Button {
+            NotificationCenter.default.post(
+                name: .searchResultActivate,
+                object: nil,
+                userInfo: ["id": hit.id]
+            )
+        } label: {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Image(systemName: "checkmark.circle")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(PanelChrome.searchAccent.opacity(0.75))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(hit.title)
+                        .font(.system(size: 14, weight: .medium, design: .rounded))
+                        .foregroundStyle(.primary)
+                        .lineLimit(2)
+                    if !hit.subtitle.isEmpty {
+                        Text(hit.subtitle)
+                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: PanelChrome.innerCorner, style: .continuous)
+                    .fill(Color.primary.opacity(0.04))
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }

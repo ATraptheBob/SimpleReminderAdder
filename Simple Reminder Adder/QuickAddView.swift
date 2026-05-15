@@ -4,8 +4,10 @@ import EventKit
 
 extension Notification.Name {
     static let quickAddTabAcceptSuggestion = Notification.Name("QuickAddTabAcceptSuggestion")
-    /// `userInfo["open"]` as Bool — list `/` picker: key routing + main panel height.
+    /// `userInfo["open"]` as Bool — list `/` picker: key routing + main panel height (expands **up**).
     static let mainPanelListPickerLayout = Notification.Name("MainPanelListPickerLayout")
+    /// `userInfo["open"]` as Bool, `height` as CGFloat — search menu height below input (expands **down**).
+    static let mainPanelSearchLayout = Notification.Name("MainPanelSearchLayout")
     /// `userInfo["delta"]` as Int (+1 down, -1 up) to move list picker selection.
     static let listPickerNavigate = Notification.Name("ListPickerNavigate")
     static let listPickerConfirm = Notification.Name("ListPickerConfirm")
@@ -13,17 +15,22 @@ extension Notification.Name {
     static let quickAddShiftReturnSave = Notification.Name("QuickAddShiftReturnSave")
 
     static let searchHotkeyToggle = Notification.Name("SearchHotkeyToggle")
-    /// `userInfo["active"]` as Bool — search mode (Cmd+F); AppDelegate hides chips and shows result strip.
+    /// `userInfo["active"]` as Bool — search mode (⌘F); AppDelegate hides chips and resizes for the search menu.
     static let searchModePresence = Notification.Name("SearchModePresence")
-    /// `userInfo["hits"]` as `[[String: Any]]` with keys id, title, subtitle.
-    static let searchResultsUpdated = Notification.Name("SearchResultsUpdated")
     static let searchResultActivate = Notification.Name("SearchResultActivate")
     static let forceExitSearchMode = Notification.Name("ForceExitSearchMode")
+
+    static let chipPrioritySliderCommit = Notification.Name("ChipPrioritySliderCommit")
+    static let chipSwipeDelete = Notification.Name("ChipSwipeDelete")
+    static let chipSwipeDuplicate = Notification.Name("ChipSwipeDuplicate")
+    static let chipsLayoutChanged = Notification.Name("ChipsLayoutChanged")
 }
 
 private struct ChipSet: Equatable {
     var priority: Int
     var hasDate: Bool
+    var showDatePill: Bool
+    var showTimePill: Bool
     var listName: String?
 }
 
@@ -32,6 +39,8 @@ private let listPickerSpacing: CGFloat = 6
 private let listPickerMaxScroll: CGFloat = 220
 
 struct QuickAddView: View {
+    private let eventStore = EKEventStore()
+
     @State private var taskText: String = ""
     @State private var lists: [EKCalendar] = []
     @FocusState private var isInputFocused: Bool
@@ -44,16 +53,18 @@ struct QuickAddView: View {
     @State private var parsedPriorityString: String? = nil
 
     @State private var suggestion: String = ""
-    @State private var lastPostedChipSet = ChipSet(priority: 0, hasDate: false, listName: nil)
+    @State private var lastPostedChipSet = ChipSet(priority: 0, hasDate: false, showDatePill: false, showTimePill: false, listName: nil)
+
+    @State private var showDatePill: Bool = false
+    @State private var showTimePill: Bool = false
 
     @State private var listPickerIndex: Int = 0
     @State private var dripSessionCount: Int = 0
     @State private var listPickerLayoutOpenState: Bool = false
     @State private var isSearchMode: Bool = false
     @State private var composeDraft: String = ""
+    @State private var searchHitRows: [SearchHitRowModel] = []
     @State private var searchDebounceTask: Task<Void, Never>?
-
-    let eventStore = EKEventStore()
 
     private var slashQuery: (base: String, filter: String)? {
         if isSearchMode { return nil }
@@ -67,7 +78,105 @@ struct QuickAddView: View {
         return lists.filter { $0.title.lowercased().contains(f) }
     }
 
+    private var searchPanelAuxiliaryHeight: CGFloat {
+        guard isSearchMode else { return 0 }
+        if searchHitRows.isEmpty { return 96 }
+        return min(260, 12 + CGFloat(searchHitRows.count) * 42 + 20)
+    }
+
+    private func postMainPanelSearchLayout() {
+        guard isSearchMode else {
+            NotificationCenter.default.post(
+                name: .mainPanelSearchLayout,
+                object: nil,
+                userInfo: ["open": false, "height": CGFloat(0)]
+            )
+            return
+        }
+        NotificationCenter.default.post(
+            name: .mainPanelSearchLayout,
+            object: nil,
+            userInfo: ["open": true, "height": searchPanelAuxiliaryHeight]
+        )
+    }
+
     var body: some View {
+        Group {
+            Group {
+                mainContent
+                    .onChange(of: taskText) { _, new in
+                        handleTaskTextChange(new)
+                    }
+            .onChange(of: isSearchMode) { _, active in
+                handleSearchModeChange(active)
+            }
+            .onChange(of: searchHitRows.count) { _, _ in
+                if isSearchMode { postMainPanelSearchLayout() }
+            }
+                    .onAppear {
+                        requestPermissionsAndFetchLists()
+                        isInputFocused = true
+                    }
+                    .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("PanelDidOpen"))) { _ in
+                        handlePanelDidOpen()
+                    }
+                    .onReceive(NotificationCenter.default.publisher(for: .quickAddTabAcceptSuggestion)) { _ in
+                        if slashQuery != nil {
+                            moveListSelection(delta: 1)
+                        } else {
+                            acceptSuggestion()
+                        }
+                    }
+                    .onReceive(NotificationCenter.default.publisher(for: .listPickerNavigate)) { note in
+                        guard slashQuery != nil, let d = note.userInfo?["delta"] as? Int else { return }
+                        moveListSelection(delta: d)
+                    }
+                    .onReceive(NotificationCenter.default.publisher(for: .listPickerConfirm)) { _ in
+                        if slashQuery != nil { applyListPick(at: clampedListIndex) }
+                    }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .listPickerCancel)) { _ in
+                cancelListPicker()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .quickAddShiftReturnSave)) { _ in
+                guard !isSearchMode else { return }
+                saveTask(keepPanelOpen: true)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .searchHotkeyToggle)) { _ in
+                toggleSearchModeFromHotkey()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .forceExitSearchMode)) { _ in
+                if isSearchMode {
+                    isSearchMode = false
+                    taskText = composeDraft
+                    composeDraft = ""
+                    searchHitRows = []
+                    postMainPanelSearchLayout()
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .searchResultActivate)) { note in
+                guard let id = note.userInfo?["id"] as? String else { return }
+                openReminderInRemindersApp(id: id)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .chipPrioritySliderCommit)) { note in
+            guard let v = note.userInfo?["value"] as? Int else { return }
+            parsedPriority = v
+            applyPriorityPrefixToTaskText()
+            parseText()
+            postIfChipsChanged()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .chipSwipeDelete)) { note in
+            guard let k = note.userInfo?["kind"] as? String else { return }
+            applyChipSwipeDelete(kind: k)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .chipSwipeDuplicate)) { note in
+            guard let k = note.userInfo?["kind"] as? String else { return }
+            applyChipSwipeDuplicate(kind: k)
+        }
+    }
+
+    private var mainContent: some View {
         VStack(spacing: listPickerSpacing) {
             if slashQuery != nil {
                 ListPickerView(
@@ -77,111 +186,96 @@ struct QuickAddView: View {
                 )
                 .padding(.horizontal, 6)
                 .padding(.top, 4)
-                .transition(.opacity.combined(with: .move(edge: .bottom)))
+                .transition(
+                    .asymmetric(
+                        insertion: .opacity.combined(with: .move(edge: .bottom)),
+                        removal: .opacity.combined(with: .move(edge: .top))
+                    )
+                )
             }
 
             inputBarContent
+
+            if isSearchMode {
+                SearchResultsMenuView(hits: searchHitRows)
+                    .padding(.horizontal, 6)
+                    .padding(.bottom, 4)
+                    .transition(
+                        .asymmetric(
+                            insertion: .opacity.combined(with: .move(edge: .top)),
+                            removal: .opacity.combined(with: .move(edge: .bottom))
+                        )
+                    )
+            }
         }
-        .animation(.easeOut(duration: 0.18), value: slashQuery != nil)
+        .animation(.spring(response: 0.28, dampingFraction: 0.9), value: slashQuery != nil)
+        .animation(.spring(response: 0.28, dampingFraction: 0.9), value: isSearchMode)
+        .animation(.spring(response: 0.26, dampingFraction: 0.92), value: searchHitRows.count)
         .padding(.bottom, slashQuery != nil ? 4 : 0)
         .background(
             VisualEffectView()
-                .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: PanelChrome.outerCorner, style: .continuous))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .stroke(Color.primary.opacity(0.06), lineWidth: 1)
+            RoundedRectangle(cornerRadius: PanelChrome.outerCorner, style: .continuous)
+                .stroke(PanelChrome.strokeSubtle, lineWidth: 1)
         )
-        .onChange(of: taskText) { _, new in
-            let open = !isSearchMode && (listSlashQuery(from: new) != nil)
-            if open != listPickerLayoutOpenState {
-                if open { listPickerIndex = 0 }
-                listPickerLayoutOpenState = open
-                NotificationCenter.default.post(
-                    name: .mainPanelListPickerLayout,
-                    object: nil,
-                    userInfo: ["open": open]
-                )
-            }
-            syncListPickerAfterTextChange(new)
-            parseText()
-            updateSuggestion()
-            postIfChipsChanged()
-            if isSearchMode {
-                scheduleSearchRefresh()
-            }
+    }
+
+    // MARK: - Handlers
+    
+    private func handleTaskTextChange(_ new: String) {
+        let open = !isSearchMode && (listSlashQuery(from: new) != nil)
+        if open != listPickerLayoutOpenState {
+            if open { listPickerIndex = 0 }
+            listPickerLayoutOpenState = open
+            NotificationCenter.default.post(
+                name: .mainPanelListPickerLayout,
+                object: nil,
+                userInfo: ["open": open]
+            )
         }
-        .onChange(of: isSearchMode) { _, active in
-            notifySearchModePresence(active: active)
-            if active {
-                scheduleSearchRefresh()
-            } else {
-                searchDebounceTask?.cancel()
-                NotificationCenter.default.post(
-                    name: .searchResultsUpdated,
-                    object: nil,
-                    userInfo: ["hits": []]
-                )
-            }
+        syncListPickerAfterTextChange(new)
+        parseText()
+        updateSuggestion()
+        postIfChipsChanged()
+        if isSearchMode {
+            scheduleSearchRefresh()
         }
-        .onAppear {
-            requestPermissionsAndFetchLists()
-            isInputFocused = true
-        }
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("PanelDidOpen"))) { _ in
-            dripSessionCount = 0
-            isSearchMode = false
-            composeDraft = ""
+    }
+
+    private func handleSearchModeChange(_ active: Bool) {
+        notifySearchModePresence(active: active)
+        if active {
+            searchHitRows = []
+            scheduleSearchRefresh()
+        } else {
             searchDebounceTask?.cancel()
-            notifySearchModePresence(active: false)
-            listPickerLayoutOpenState = listSlashQuery(from: taskText) != nil
-            if listPickerLayoutOpenState {
-                NotificationCenter.default.post(
-                    name: .mainPanelListPickerLayout,
-                    object: nil,
-                    userInfo: ["open": true]
-                )
-            }
-            isInputFocused = false
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                isInputFocused = true
-                forcePostChipState()
-            }
+            searchHitRows = []
         }
-        .onReceive(NotificationCenter.default.publisher(for: .quickAddTabAcceptSuggestion)) { _ in
-            if slashQuery != nil {
-                moveListSelection(delta: 1)
-            } else {
-                acceptSuggestion()
-            }
+        postMainPanelSearchLayout()
+    }
+
+    private func handlePanelDidOpen() {
+        dripSessionCount = 0
+        isSearchMode = false
+        composeDraft = ""
+        searchHitRows = []
+        searchDebounceTask?.cancel()
+        notifySearchModePresence(active: false)
+        postMainPanelSearchLayout()
+        listPickerLayoutOpenState = listSlashQuery(from: taskText) != nil
+        if listPickerLayoutOpenState {
+            NotificationCenter.default.post(
+                name: .mainPanelListPickerLayout,
+                object: nil,
+                userInfo: ["open": true]
+            )
         }
-        .onReceive(NotificationCenter.default.publisher(for: .listPickerNavigate)) { note in
-            guard slashQuery != nil, let d = note.userInfo?["delta"] as? Int else { return }
-            moveListSelection(delta: d)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .listPickerConfirm)) { _ in
-            if slashQuery != nil { applyListPick(at: clampedListIndex) }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .listPickerCancel)) { _ in
-            cancelListPicker()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .quickAddShiftReturnSave)) { _ in
-            guard !isSearchMode else { return }
-            saveTask(keepPanelOpen: true)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .searchHotkeyToggle)) { _ in
-            toggleSearchModeFromHotkey()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .forceExitSearchMode)) { _ in
-            if isSearchMode {
-                isSearchMode = false
-                taskText = composeDraft
-                composeDraft = ""
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .searchResultActivate)) { note in
-            guard let id = note.userInfo?["id"] as? String else { return }
-            openReminderInRemindersApp(id: id)
+        isInputFocused = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            isInputFocused = true
+            forcePostChipState()
         }
     }
 
@@ -380,13 +474,19 @@ struct QuickAddView: View {
 
     private func postIfChipsChanged() {
         if isSearchMode {
-            let cleared = ChipSet(priority: 0, hasDate: false, listName: nil)
+            let cleared = ChipSet(priority: 0, hasDate: false, showDatePill: false, showTimePill: false, listName: nil)
             guard cleared != lastPostedChipSet else { return }
             lastPostedChipSet = cleared
             postChipState()
             return
         }
-        let current = ChipSet(priority: parsedPriority, hasDate: parsedDate != nil, listName: parsedList?.title)
+        let current = ChipSet(
+            priority: parsedPriority,
+            hasDate: parsedDate != nil,
+            showDatePill: showDatePill,
+            showTimePill: showTimePill,
+            listName: parsedList?.title
+        )
         guard current != lastPostedChipSet else { return }
         lastPostedChipSet = current
         postChipState()
@@ -397,13 +497,19 @@ struct QuickAddView: View {
     }
 
     private func postChipState() {
+        let glowDate = showDatePill && parsedDate != nil
+        let glowTime = showTimePill && parsedDate != nil
         NotificationCenter.default.post(
             name: NSNotification.Name("ParsedStateChanged"),
             object: nil,
             userInfo: [
-                "date":     parsedDate as Any,
-                "list":     parsedList?.title as Any,
+                "date": parsedDate as Any,
+                "list": parsedList?.title as Any,
                 "priority": parsedPriority,
+                "showDatePill": showDatePill,
+                "showTimePill": showTimePill,
+                "glowDate": glowDate,
+                "glowTime": glowTime,
             ]
         )
     }
@@ -412,9 +518,9 @@ struct QuickAddView: View {
 
     private func priorityColor() -> Color {
         switch parsedPriority {
-        case 1:  return Color(hue: 0.0,  saturation: 0.6, brightness: 0.95)
-        case 5:  return Color(hue: 0.11, saturation: 0.6, brightness: 0.95)
-        default: return Color(hue: 0.60, saturation: 0.5, brightness: 0.90)
+        case 1: return PanelChrome.priorityHigh
+        case 5: return PanelChrome.priorityMed
+        default: return PanelChrome.priorityLow
         }
     }
 
@@ -427,13 +533,13 @@ struct QuickAddView: View {
         var attr = AttributedString(text)
         attr.foregroundColor = .primary
         if let s = parsedPriorityString, let r = attr.range(of: s) {
-            attr[r].foregroundColor = priorityColor().opacity(0.5)
+            attr[r].foregroundColor = priorityColor().opacity(0.45)
         }
         if let s = parsedDateString, let r = attr.range(of: s, options: .caseInsensitive) {
-            attr[r].foregroundColor = Color(hue: 0.08, saturation: 0.6, brightness: 0.95).opacity(0.5)
+            attr[r].foregroundColor = PanelChrome.dateTime.opacity(0.45)
         }
         if let s = parsedListString, let r = attr.range(of: s, options: .caseInsensitive) {
-            attr[r].foregroundColor = Color(hue: 0.75, saturation: 0.4, brightness: 0.90).opacity(0.5)
+            attr[r].foregroundColor = PanelChrome.listAccent.opacity(0.45)
         }
         return attr
     }
@@ -448,11 +554,15 @@ struct QuickAddView: View {
             parsedListString = nil
             parsedPriority = 0
             parsedPriorityString = nil
+            showDatePill = false
+            showTimePill = false
             return
         }
         parsedDate = nil; parsedDateString = nil
         parsedList = nil; parsedListString = nil
         parsedPriority = 0; parsedPriorityString = nil
+        showDatePill = false
+        showTimePill = false
         guard !taskText.isEmpty else { return }
 
         if taskText.hasPrefix("!!!") { parsedPriority = 1; parsedPriorityString = "!!!" }
@@ -468,23 +578,76 @@ struct QuickAddView: View {
             }
         }
 
-        if let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.date.rawValue) {
-            let matches = detector.matches(in: taskText, options: [], range: NSRange(taskText.startIndex..., in: taskText))
-            if let match = matches.first, let date = match.date, let baseRange = Range(match.range, in: taskText) {
-                var finalDateString = String(taskText[baseRange])
-                let textBefore = taskText[taskText.startIndex..<baseRange.lowerBound]
-                let wordsBefore = textBefore.components(separatedBy: .whitespaces)
-                if let lastWord = wordsBefore.last(where: { !$0.isEmpty })?.lowercased(),
-                   ["at", "on", "by", "for", "due"].contains(lastWord) {
-                    let searchPattern = "(?i)\\b\(lastWord)\\s+\\Q\(finalDateString)\\E"
-                    if let fullRange = taskText.range(of: searchPattern, options: .regularExpression) {
-                        finalDateString = String(taskText[fullRange])
-                    }
-                }
-                parsedDateString = finalDateString
-                parsedDate = date
-            }
+        let nd = NaturalDateParser.parse(text: taskText)
+        parsedDate = nd.date
+        parsedDateString = nd.matchedSubstring
+        if nd.date != nil {
+            showDatePill = nd.hasDateComponent
+            showTimePill = nd.hasTimeComponent
+            if !showDatePill && !showTimePill { showTimePill = true }
         }
+    }
+
+    private func applyPriorityPrefixToTaskText() {
+        var t = taskText
+        while t.first == "!" {
+            t.removeFirst()
+        }
+        t = t.trimmingCharacters(in: .whitespaces)
+        let prefix: String
+        switch parsedPriority {
+        case 1: prefix = "!!!"
+        case 5: prefix = "!!"
+        case 9: prefix = "!"
+        default: prefix = ""
+        }
+        taskText = prefix.isEmpty ? t : (t.isEmpty ? prefix : prefix + " " + t)
+    }
+
+    private func applyChipSwipeDelete(kind: String) {
+        switch kind {
+        case "priority":
+            var t = taskText
+            while t.first == "!" { t.removeFirst() }
+            taskText = t.trimmingCharacters(in: .whitespaces)
+        case "date", "time":
+            if let s = parsedDateString {
+                taskText = taskText.replacingOccurrences(of: s, with: "", options: .caseInsensitive)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        case "list":
+            if let s = parsedListString {
+                taskText = taskText.replacingOccurrences(of: s, with: "", options: .caseInsensitive)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        default: break
+        }
+        parseText()
+        postIfChipsChanged()
+    }
+
+    private func applyChipSwipeDuplicate(kind: String) {
+        switch kind {
+        case "list":
+            if let s = parsedListString {
+                let extra = " " + s
+                if taskText.range(of: extra, options: .caseInsensitive) == nil {
+                    taskText = taskText.trimmingCharacters(in: .whitespacesAndNewlines) + extra
+                }
+            }
+        case "date", "time":
+            if let s = parsedDateString {
+                taskText = taskText.trimmingCharacters(in: .whitespacesAndNewlines) + " " + s
+            }
+        case "priority":
+            let body = String(taskText.drop(while: { $0 == "!" })).trimmingCharacters(in: .whitespaces)
+            if parsedPriority == 9 { taskText = "!! " + body }
+            else if parsedPriority == 5 { taskText = "!!! " + body }
+            else { taskText = "!!! " + body }
+        default: break
+        }
+        parseText()
+        postIfChipsChanged()
     }
 
     // MARK: - Save
@@ -511,6 +674,7 @@ struct QuickAddView: View {
         }
         do {
             try eventStore.save(reminder, commit: true)
+            ReminderHaptics.successSnap()
         } catch {
             NSSound.beep()
             return
@@ -535,7 +699,7 @@ struct QuickAddView: View {
         }
         suggestion = ""
         parseText()
-        lastPostedChipSet = ChipSet(priority: 0, hasDate: false, listName: nil)
+        lastPostedChipSet = ChipSet(priority: 0, hasDate: false, showDatePill: false, showTimePill: false, listName: nil)
         postChipState()
 
         NotificationCenter.default.post(
@@ -587,18 +751,10 @@ struct QuickAddView: View {
             let hits = await fetchMatchingReminders(query: query)
             guard !Task.isCancelled else { return }
             guard isSearchMode else { return }
-            let rows: [[String: Any]] = hits.map { r in
-                [
-                    "id": r.calendarItemIdentifier,
-                    "title": r.title,
-                    "subtitle": reminderSubtitle(for: r),
-                ] as [String: Any]
+            searchHitRows = hits.map {
+                SearchHitRowModel(id: $0.calendarItemIdentifier, title: $0.title, subtitle: reminderSubtitle(for: $0))
             }
-            NotificationCenter.default.post(
-                name: .searchResultsUpdated,
-                object: nil,
-                userInfo: ["hits": rows]
-            )
+            postMainPanelSearchLayout()
         }
     }
 
@@ -667,7 +823,7 @@ struct QuickAddView: View {
 struct VisualEffectView: NSViewRepresentable {
     func makeNSView(context: Context) -> NSVisualEffectView {
         let v = NSVisualEffectView()
-        v.material = .hudWindow
+        v.material = .popover
         v.blendingMode = .behindWindow
         v.state = .active
         return v

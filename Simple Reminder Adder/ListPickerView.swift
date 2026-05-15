@@ -53,8 +53,8 @@ struct ListPickerView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(isOn ? Color.accentColor.opacity(0.22) : Color.clear)
+                RoundedRectangle(cornerRadius: PanelChrome.innerCorner, style: .continuous)
+                    .fill(isOn ? PanelChrome.rowFillSelected : Color.primary.opacity(0.035))
             )
             .contentShape(Rectangle())
         }
