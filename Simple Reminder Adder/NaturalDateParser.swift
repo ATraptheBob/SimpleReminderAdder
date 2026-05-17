@@ -63,15 +63,25 @@ enum NaturalDateParser {
             (#"(?i)\btonight\b"#, tonightResult(reference: now, cal: cal)),
             (#"(?i)\bthis afternoon\b"#, dayPartResult(reference: now, cal: cal, hour: 14, minute: 0)),
             (#"(?i)\bthis morning\b"#, dayPartResult(reference: now, cal: cal, hour: 9, minute: 0)),
+            (#"(?i)\bthis weekend\b"#, weekendResult(offsetWeeks: 0, reference: now, cal: cal)),
+            (#"(?i)\bnext weekend\b"#, weekendResult(offsetWeeks: 1, reference: now, cal: cal)),
             (#"(?i)\bnext week\b"#, offsetDays(7, atHour: 9, minute: 0, reference: now, cal: cal)),
             (#"(?i)\bnext month\b"#, offsetMonths(1, atHour: 9, minute: 0, reference: now, cal: cal)),
+            (#"(?i)\bnext year\b"#, offsetYears(1, atHour: 9, minute: 0, reference: now, cal: cal)),
             (#"(?i)\bend of day\b"#, todayAt(hour: 17, minute: 0, reference: now, cal: cal, rollForwardIfPast: true)),
             (#"(?i)\beod\b"#, todayAt(hour: 17, minute: 0, reference: now, cal: cal, rollForwardIfPast: true)),
             (#"(?i)\bclose of business\b"#, fridaySameWeekAt(hour: 17, minute: 0, reference: now, cal: cal)),
             (#"(?i)\bcob\b"#, fridaySameWeekAt(hour: 17, minute: 0, reference: now, cal: cal)),
+            (#"(?i)\bend of week\b"#, fridaySameWeekAt(hour: 17, minute: 0, reference: now, cal: cal)),
+            (#"(?i)\bend of month\b"#, endOfMonthResult(reference: now, cal: cal)),
             (#"(?i)\bmidday\b"#, todayAt(hour: 12, minute: 0, reference: now, cal: cal, rollForwardIfPast: true)),
             (#"(?i)\bnoon\b"#, todayAt(hour: 12, minute: 0, reference: now, cal: cal, rollForwardIfPast: true)),
             (#"(?i)\bmidnight\b"#, endOfToday(reference: now, cal: cal)),
+            (#"(?i)\blater today\b"#, offsetHours(4, reference: now, cal: cal)),
+            (#"(?i)\blater\b"#, offsetHours(4, reference: now, cal: cal)),
+            (#"(?i)\bin a week\b"#, offsetDays(7, atHour: 9, minute: 0, reference: now, cal: cal)),
+            (#"(?i)\bin a month\b"#, offsetMonths(1, atHour: 9, minute: 0, reference: now, cal: cal)),
+            (#"(?i)\bin a year\b"#, offsetYears(1, atHour: 9, minute: 0, reference: now, cal: cal)),
         ]
 
         for (pattern, result) in phrasePairs {
@@ -203,6 +213,55 @@ enum NaturalDateParser {
         return NaturalDateParseResult(date: d, matchedSubstring: nil, hasDateComponent: true, hasTimeComponent: true)
     }
 
+    private static func offsetYears(_ years: Int, atHour hour: Int, minute: Int, reference now: Date, cal: Calendar) -> NaturalDateParseResult {
+        guard let day = cal.date(byAdding: .year, value: years, to: cal.startOfDay(for: now)) else {
+            return NaturalDateParseResult(date: nil, matchedSubstring: nil, hasDateComponent: false, hasTimeComponent: false)
+        }
+        var dc = DateComponents()
+        dc.hour = hour
+        dc.minute = minute
+        let d = cal.date(byAdding: dc, to: day)
+        return NaturalDateParseResult(date: d, matchedSubstring: nil, hasDateComponent: true, hasTimeComponent: true)
+    }
+
+    private static func offsetHours(_ hours: Int, reference now: Date, cal: Calendar) -> NaturalDateParseResult {
+        guard let d = cal.date(byAdding: .hour, value: hours, to: now) else {
+            return NaturalDateParseResult(date: nil, matchedSubstring: nil, hasDateComponent: false, hasTimeComponent: false)
+        }
+        return NaturalDateParseResult(date: d, matchedSubstring: nil, hasDateComponent: false, hasTimeComponent: true)
+    }
+
+    private static func weekendResult(offsetWeeks: Int, reference now: Date, cal: Calendar) -> NaturalDateParseResult {
+        var comps = cal.dateComponents([.yearForWeekOfYear, .weekOfYear], from: now)
+        comps.weekday = 7 // Saturday
+        guard var target = cal.date(from: comps) else {
+            return NaturalDateParseResult(date: nil, matchedSubstring: nil, hasDateComponent: false, hasTimeComponent: false)
+        }
+        if target < now {
+            target = cal.date(byAdding: .weekOfYear, value: 1, to: target) ?? target
+        }
+        if offsetWeeks > 0 {
+            target = cal.date(byAdding: .weekOfYear, value: offsetWeeks, to: target) ?? target
+        }
+        var dc = DateComponents()
+        dc.hour = 9
+        dc.minute = 0
+        let d = cal.date(byAdding: dc, to: target)
+        return NaturalDateParseResult(date: d, matchedSubstring: nil, hasDateComponent: true, hasTimeComponent: true)
+    }
+
+    private static func endOfMonthResult(reference now: Date, cal: Calendar) -> NaturalDateParseResult {
+        guard let monthInterval = cal.dateInterval(of: .month, for: now),
+              let lastDay = cal.date(byAdding: .day, value: -1, to: monthInterval.end) else {
+            return NaturalDateParseResult(date: nil, matchedSubstring: nil, hasDateComponent: false, hasTimeComponent: false)
+        }
+        var dc = DateComponents()
+        dc.hour = 17
+        dc.minute = 0
+        let d = cal.date(byAdding: dc, to: lastDay)
+        return NaturalDateParseResult(date: d, matchedSubstring: nil, hasDateComponent: true, hasTimeComponent: true)
+    }
+
     private static func fridaySameWeekAt(hour: Int, minute: Int, reference now: Date, cal: Calendar) -> NaturalDateParseResult {
         var comps = cal.dateComponents([.yearForWeekOfYear, .weekOfYear], from: now)
         comps.weekday = 6
@@ -308,7 +367,7 @@ enum NaturalDateParser {
             return NaturalDateParseResult(date: d, matchedSubstring: String(text[r]), hasDateComponent: false, hasTimeComponent: true)
         }
 
-        let pattern = #"(?i)\bin\s+(\d+)\s*(hours?|hrs?|h\b|minutes?|mins?|m\b|days?|d\b)\b"#
+        let pattern = #"(?i)\bin\s+(\d+)\s*(hours?|hrs?|h\b|minutes?|mins?|m\b|days?|d\b|weeks?|w\b|months?|years?|y\b)\b"#
         guard let re = try? NSRegularExpression(pattern: pattern),
               let m = re.firstMatch(in: text, range: full),
               let r = Range(m.range, in: text) else { return nil }
@@ -325,6 +384,12 @@ enum NaturalDateParser {
             date = cal.date(byAdding: .minute, value: n, to: now)
         } else if unitRaw.hasPrefix("day") || unitRaw == "d" {
             date = cal.date(byAdding: .day, value: n, to: now)
+        } else if unitRaw.hasPrefix("week") || unitRaw == "w" {
+            date = cal.date(byAdding: .day, value: n * 7, to: now)
+        } else if unitRaw.hasPrefix("month") {
+            date = cal.date(byAdding: .month, value: n, to: now)
+        } else if unitRaw.hasPrefix("year") || unitRaw == "y" {
+            date = cal.date(byAdding: .year, value: n, to: now)
         } else {
             date = nil
         }

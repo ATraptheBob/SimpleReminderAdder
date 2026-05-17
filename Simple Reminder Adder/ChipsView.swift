@@ -68,7 +68,7 @@ struct ChipsView: View {
                 glow: false
             )
             .onTapGesture {
-                withAnimation(.spring(response: 0.26, dampingFraction: 0.82)) {
+                withAnimation(.spring(response: 0.15, dampingFraction: 0.82)) {
                     overlay.priorityExpanded.toggle()
                     NotificationCenter.default.post(name: .chipsLayoutChanged, object: nil)
                 }
@@ -79,7 +79,7 @@ struct ChipsView: View {
                     .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
-        .animation(.spring(response: 0.26, dampingFraction: 0.82), value: overlay.priorityExpanded)
+        .animation(.spring(response: 0.15, dampingFraction: 0.82), value: overlay.priorityExpanded)
     }
 
     private func prioritySlider(accent: Color) -> some View {

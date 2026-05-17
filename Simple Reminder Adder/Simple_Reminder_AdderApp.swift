@@ -168,7 +168,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func runPanelOpenMotion(token: UInt64) {
         let main     = panel.contentView
-        let duration = 0.34
+        let duration = 0.15
         let maxBlur: CGFloat = 12
         let start    = CFAbsoluteTimeGetCurrent()
 
@@ -275,7 +275,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func runPanelCloseMotion(token: UInt64) {
         let main     = panel.contentView
-        let duration = 0.32
+        let duration = 0.15
         let maxBlur: CGFloat = 14
         let start    = CFAbsoluteTimeGetCurrent()
 
@@ -368,7 +368,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if searchModeIsOpen {
             if let cp = chipsPanel, cp.isVisible {
                 NSAnimationContext.runAnimationGroup { ctx in
-                    ctx.duration = 0.15
+                    ctx.duration = 0.08
                     ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
                     ctx.allowsImplicitAnimation = true
                     cp.animator().alphaValue = 0
@@ -388,7 +388,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         guard hasChips else {
             if let cp = chipsPanel, cp.isVisible {
                 NSAnimationContext.runAnimationGroup { ctx in
-                    ctx.duration = 0.18
+                    ctx.duration = 0.10
                     ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
                     ctx.allowsImplicitAnimation = true
                     cp.animator().alphaValue = 0
@@ -468,7 +468,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             chipsPanel?.orderFront(nil)
 
             NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = 0.38
+                ctx.duration = 0.18
                 // Spring-like cubic: fast exit, gentle settle
                 ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.18, 1.0, 0.34, 1.0)
                 ctx.allowsImplicitAnimation = true
@@ -478,7 +478,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             // Already visible — animate frame update (content changed, position may shift).
             NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = 0.22
+                ctx.duration = 0.12
                 ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.25, 0.46, 0.45, 0.94)
                 ctx.allowsImplicitAnimation = true
                 chipsPanel?.animator().setFrame(targetFrame, display: true)
@@ -521,18 +521,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         guard let screen = panel.screen ?? NSScreen.main else { return }
         let sf = screen.visibleFrame
         let x  = sf.midX - size.width / 2
-        let y  = sf.minY + sf.height * 0.18
+        let y  = sf.maxY - size.height - 80
 
-        let startFrame   = NSRect(x: x, y: y - 18, width: size.width, height: size.height)
+        let startFrame   = NSRect(x: x, y: y + 18, width: size.width, height: size.height)
         let restingFrame = NSRect(x: x, y: y,       width: size.width, height: size.height)
-        let exitFrame    = NSRect(x: x, y: y - 18,  width: size.width, height: size.height)
+        let exitFrame    = NSRect(x: x, y: y + 18,  width: size.width, height: size.height)
 
         toastPanel?.setFrame(startFrame, display: false)
         toastPanel?.alphaValue = 0
         toastPanel?.orderFront(nil)
 
         NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.28
+            ctx.duration = 0.15
             ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.0, 0.0, 0.2, 1.0)
             ctx.allowsImplicitAnimation = true
             toastPanel?.animator().setFrame(restingFrame, display: true)
@@ -542,7 +542,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let dismiss = DispatchWorkItem { [weak self] in
             guard let self, showGen == self.toastShowGeneration else { return }
             NSAnimationContext.runAnimationGroup({ ctx in
-                ctx.duration = 0.26
+                ctx.duration = 0.15
                 ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
                 ctx.allowsImplicitAnimation = true
                 self.toastPanel?.animator().setFrame(exitFrame, display: true)

@@ -174,8 +174,9 @@ struct QuickAddView: View {
     // MARK: - Body
 
     private var mainContent: some View {
-        VStack(spacing: listPickerSpacing) {
+        VStack(spacing: 0) {
             if slashQuery != nil {
+                Spacer(minLength: 0)
                 ListPickerView(
                     calendars: filteredListsForPicker,
                     selectedIndex: clampedListIndex,
@@ -183,6 +184,7 @@ struct QuickAddView: View {
                 )
                 .padding(.horizontal, 6)
                 .padding(.top, 4)
+                .padding(.bottom, listPickerSpacing)
                 .transition(
                     .asymmetric(
                         insertion: .opacity.combined(with: .move(edge: .bottom)),
@@ -196,6 +198,7 @@ struct QuickAddView: View {
             if isSearchMode {
                 SearchResultsMenuView(hits: searchHitRows)
                     .padding(.horizontal, 6)
+                    .padding(.top, listPickerSpacing)
                     .padding(.bottom, 4)
                     .transition(
                         .asymmetric(
@@ -203,11 +206,9 @@ struct QuickAddView: View {
                             removal:   .opacity.combined(with: .move(edge: .bottom))
                         )
                     )
+                Spacer(minLength: 0)
             }
         }
-        .animation(.spring(response: 0.28, dampingFraction: 0.9),  value: slashQuery != nil)
-        .animation(.spring(response: 0.28, dampingFraction: 0.9),  value: isSearchMode)
-        .animation(.spring(response: 0.26, dampingFraction: 0.92), value: searchHitRows.count)
         .padding(.bottom, slashQuery != nil ? 4 : 0)
         .background(
             VisualEffectView()
@@ -268,7 +269,7 @@ struct QuickAddView: View {
             )
         }
         isInputFocused = false
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
             isInputFocused = true
             forcePostChipState()
         }
@@ -341,7 +342,7 @@ struct QuickAddView: View {
                 }
                 .padding(.trailing, 14)
                 .transition(.opacity.combined(with: .scale(scale: 0.8)))
-                .animation(.spring(response: 0.3, dampingFraction: 0.7), value: dripSessionCount)
+                .animation(.spring(response: 0.15, dampingFraction: 0.8), value: dripSessionCount)
             }
         }
     }
@@ -662,7 +663,7 @@ struct QuickAddView: View {
 
         if keepPanelOpen {
             dripSessionCount += 1
-            withAnimation(.spring(response: 0.32, dampingFraction: 0.78)) { taskText = "" }
+            withAnimation(.spring(response: 0.15, dampingFraction: 0.8)) { taskText = "" }
         } else {
             taskText = ""
             dripSessionCount = 0
