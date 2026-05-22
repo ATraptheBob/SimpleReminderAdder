@@ -18,6 +18,7 @@ extension Notification.Name {
     static let chipSwipeDelete             = Notification.Name("ChipSwipeDelete")
     static let chipSwipeDuplicate          = Notification.Name("ChipSwipeDuplicate")
     static let chipsLayoutChanged          = Notification.Name("ChipsLayoutChanged")
+    static let undoLastTask = Notification.Name("UndoLastTask")
 }
 
 // MARK: - ChipSet
@@ -49,6 +50,9 @@ struct QuickAddView: View {
     @State private var parsedListString: String? = nil
     @State private var parsedPriority: Int      = 0
     @State private var parsedPriorityString: String? = nil
+    @State private var saveFlashActive = false
+    @State private var parsedRecurrence: EKRecurrenceRule? = nil
+    @State private var parsedRecurrenceString: String? = nil
 
     @State private var suggestion: String = ""
     @State private var lastPostedChipSet = ChipSet(priority: 0, date: nil, showDatePill: false, showTimePill: false, listName: nil)
@@ -168,6 +172,21 @@ struct QuickAddView: View {
         .onReceive(NotificationCenter.default.publisher(for: .chipSwipeDuplicate)) { note in
             guard let k = note.userInfo?["kind"] as? String else { return }
             applyChipSwipeDuplicate(kind: k)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("UndoLastTask"))) { note in
+            guard let id = note.userInfo?["reminderID"] as? String,
+                  let reminder = eventStore.calendarItem(withIdentifier: id) as? EKReminder else { return }
+            do {
+                try eventStore.remove(reminder, commit: true)
+                ReminderHaptics.successSnap()
+                // Brief visual ack — reuse the flash in reverse tint
+                withAnimation(.easeOut(duration: 0.15)) { saveFlashActive = true }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    withAnimation(.easeOut(duration: 0.2)) { saveFlashActive = false }
+                }
+            } catch {
+                NSSound.beep()
+            }
         }
     }
 
@@ -292,7 +311,7 @@ struct QuickAddView: View {
                         : "Task…  ·  ⌘F search  ·  ⇧⏎ save & keep  ·  space + / for lists"
                 )
                 .font(.system(size: 18, weight: .light, design: .rounded))
-                .foregroundColor(.primary.opacity(0.22))
+                .foregroundColor(.primary.opacity(0.30))
                 .allowsHitTesting(false)
                 .padding(.horizontal, 22)
             }
@@ -324,6 +343,19 @@ struct QuickAddView: View {
                     if !isSearchMode { saveTask(keepPanelOpen: false) }
                 }
                 .padding(.horizontal, 22)
+
+            // Save-success flash overlay
+            if saveFlashActive {
+                HStack {
+                    Spacer()
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(Color(hue: 0.36, saturation: 0.32, brightness: 0.72).opacity(0.75))
+                        .transition(.scale(scale: 0.6).combined(with: .opacity))
+                    Spacer()
+                }
+                .allowsHitTesting(false)
+            }
         }
         .frame(height: inputBarHeight)
         .overlay(alignment: .trailing) {
@@ -343,6 +375,29 @@ struct QuickAddView: View {
                 .padding(.trailing, 14)
                 .transition(.opacity.combined(with: .scale(scale: 0.8)))
                 .animation(.spring(response: 0.15, dampingFraction: 0.8), value: dripSessionCount)
+            }
+        }
+        // Default-list destination pill — shows when no list is explicitly parsed
+        .overlay(alignment: .bottomTrailing) {
+            if !isSearchMode, slashQuery == nil, parsedList == nil, !taskText.isEmpty,
+               let defaultName = lists.first?.title {
+                HStack(spacing: 3) {
+                    Image(systemName: "arrow.right.circle")
+                        .font(.system(size: 9, weight: .semibold))
+                    Text(defaultName)
+                        .font(.system(size: 10, weight: .medium, design: .rounded))
+                }
+                .foregroundStyle(PanelChrome.listAccent.opacity(0.45))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(
+                    Capsule().fill(PanelChrome.listAccent.opacity(0.07))
+                )
+                .overlay(Capsule().stroke(PanelChrome.listAccent.opacity(0.13), lineWidth: 0.5))
+                .padding(.trailing, 10)
+                .padding(.bottom, 6)
+                .transition(.opacity.combined(with: .scale(scale: 0.85, anchor: .bottomTrailing)))
+                .animation(.easeOut(duration: 0.15), value: taskText.isEmpty)
             }
         }
     }
@@ -514,6 +569,9 @@ struct QuickAddView: View {
         if let s = parsedListString, let r = attr.range(of: s, options: .caseInsensitive) {
             attr[r].foregroundColor = PanelChrome.listAccent.opacity(0.45)
         }
+        if let s = parsedRecurrenceString, let r = attr.range(of: s, options: .caseInsensitive) {
+            attr[r].foregroundColor = PanelChrome.priorityLow.opacity(0.45)
+        }
         return attr
     }
 
@@ -521,12 +579,14 @@ struct QuickAddView: View {
 
     private func parseText() {
         if isSearchMode {
+            parsedRecurrence = nil; parsedRecurrenceString = nil
             parsedDate = nil; parsedDateString = nil
             parsedList = nil; parsedListString = nil
             parsedPriority = 0; parsedPriorityString = nil
             showDatePill = false; showTimePill = false
             return
         }
+        parsedRecurrence = nil; parsedRecurrenceString = nil
         parsedDate = nil; parsedDateString = nil
         parsedList = nil; parsedListString = nil
         parsedPriority = 0; parsedPriorityString = nil
@@ -554,6 +614,10 @@ struct QuickAddView: View {
             showTimePill = nd.hasTimeComponent
             if !showDatePill && !showTimePill { showTimePill = true }
         }
+        
+        let rec = parseRecurrence(from: taskText)
+        parsedRecurrence       = rec.rule
+        parsedRecurrenceString = rec.matchedString
     }
 
     private func applyPriorityPrefixToTaskText() {
@@ -630,20 +694,24 @@ struct QuickAddView: View {
         guard !taskText.isEmpty else { return }
 
         var cleanTitle = taskText
-        if let s = parsedPriorityString { cleanTitle = cleanTitle.replacingOccurrences(of: s, with: "") }
-        if let s = parsedDateString     { cleanTitle = cleanTitle.replacingOccurrences(of: s, with: "", options: .caseInsensitive) }
-        if let s = parsedListString     { cleanTitle = cleanTitle.replacingOccurrences(of: s, with: "", options: .caseInsensitive) }
+        if let s = parsedPriorityString   { cleanTitle = cleanTitle.replacingOccurrences(of: s, with: "") }
+        if let s = parsedDateString       { cleanTitle = cleanTitle.replacingOccurrences(of: s, with: "", options: .caseInsensitive) }
+        if let s = parsedListString       { cleanTitle = cleanTitle.replacingOccurrences(of: s, with: "", options: .caseInsensitive) }
+        if let s = parsedRecurrenceString { cleanTitle = cleanTitle.replacingOccurrences(of: s, with: "", options: .caseInsensitive) }
         cleanTitle = cleanTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         if cleanTitle.isEmpty { cleanTitle = "New Task" }
 
         let dest     = parsedList ?? eventStore.defaultCalendarForNewReminders()
         let reminder = EKReminder(eventStore: eventStore)
-        reminder.title = cleanTitle
+        reminder.title    = cleanTitle
         if let dest { reminder.calendar = dest }
         reminder.priority = parsedPriority
         if let d = parsedDate {
             reminder.dueDateComponents = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: d)
             reminder.addAlarm(EKAlarm(absoluteDate: d))
+        }
+        if let rule = parsedRecurrence {
+            reminder.recurrenceRules = [rule]
         }
         do {
             try eventStore.save(reminder, commit: true)
@@ -653,12 +721,19 @@ struct QuickAddView: View {
             return
         }
 
+        let savedID        = reminder.calendarItemIdentifier
         let finalTitle     = cleanTitle
         let finalListTitle = dest?.title ?? "Reminders"
         var finalDateFmt: String?
         if let d = parsedDate {
             let fmt = DateFormatter(); fmt.dateStyle = .short; fmt.timeStyle = .short
             finalDateFmt = fmt.string(from: d)
+        }
+
+        // Brief success flash
+        withAnimation(.spring(response: 0.12, dampingFraction: 0.7)) { saveFlashActive = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            withAnimation(.easeOut(duration: 0.2)) { saveFlashActive = false }
         }
 
         if keepPanelOpen {
@@ -669,6 +744,7 @@ struct QuickAddView: View {
             dripSessionCount = 0
         }
         suggestion = ""
+        parsedRecurrence = nil; parsedRecurrenceString = nil
         parseText()
         lastPostedChipSet = ChipSet(priority: 0, date: nil, showDatePill: false, showTimePill: false, listName: nil)
         postChipState()
@@ -681,6 +757,7 @@ struct QuickAddView: View {
                 "list":          finalListTitle,
                 "date":          finalDateFmt ?? "",
                 "keepPanelOpen": keepPanelOpen,
+                "reminderID":    savedID,           // ← new, used by ⌘Z undo
             ]
         )
     }
@@ -775,6 +852,59 @@ struct QuickAddView: View {
                 await MainActor.run { self.lists = eventStore.calendars(for: .reminder) }
             } catch { print("Permission error: \(error)") }
         }
+    }
+    
+    // MARK: - Recurrence parsing
+
+    private func parseRecurrence(from text: String) -> (rule: EKRecurrenceRule?, matchedString: String?) {
+        let ns   = text as NSString
+        let full = NSRange(location: 0, length: ns.length)
+
+        // Simple frequency patterns
+        let freqPatterns: [(String, EKRecurrenceFrequency)] = [
+            (#"(?i)\bevery\s+day\b"#,   .daily),
+            (#"(?i)\bdaily\b"#,         .daily),
+            (#"(?i)\bevery\s+week\b"#,  .weekly),
+            (#"(?i)\bweekly\b"#,        .weekly),
+            (#"(?i)\bevery\s+month\b"#, .monthly),
+            (#"(?i)\bmonthly\b"#,       .monthly),
+            (#"(?i)\bevery\s+year\b"#,  .yearly),
+            (#"(?i)\bannually\b"#,      .yearly),
+            (#"(?i)\byearly\b"#,        .yearly),
+        ]
+        for (pattern, freq) in freqPatterns {
+            guard let re = try? NSRegularExpression(pattern: pattern),
+                  let m  = re.firstMatch(in: text, options: [], range: full),
+                  let r  = Range(m.range, in: text) else { continue }
+            let rule = EKRecurrenceRule(recurrenceWith: freq, interval: 1, end: nil)
+            return (rule, String(text[r]))
+        }
+
+        // "Every <weekday>" → weekly on that day
+        let weekdayMap: [(String, EKWeekday)] = [
+            ("monday", .monday), ("tuesday", .tuesday), ("wednesday", .wednesday),
+            ("thursday", .thursday), ("friday", .friday),
+            ("saturday", .saturday), ("sunday", .sunday),
+        ]
+        for (name, wd) in weekdayMap {
+            let pattern = "(?i)\\bevery\\s+\(name)\\b"
+            guard let re = try? NSRegularExpression(pattern: pattern),
+                  let m  = re.firstMatch(in: text, options: [], range: full),
+                  let r  = Range(m.range, in: text) else { continue }
+            let rule = EKRecurrenceRule(
+                recurrenceWith: .weekly,
+                interval: 1,
+                daysOfTheWeek: [EKRecurrenceDayOfWeek(wd)],
+                daysOfTheMonth: nil,
+                monthsOfTheYear: nil,
+                weeksOfTheYear: nil,
+                daysOfTheYear: nil,
+                setPositions: nil,
+                end: nil
+            )
+            return (rule, String(text[r]))
+        }
+        return (nil, nil)
     }
 }
 

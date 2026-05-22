@@ -19,13 +19,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var panel: FloatingPanel!
     var chipsPanel: FloatingPanel?
     var toastPanel: FloatingPanel?
-
+    
     var globalClickMonitor: Any?
     var localKeyMonitor: Any?
 
     private var toastDismissWorkItem: DispatchWorkItem?
     private var toastShowGeneration: UInt64 = 0
     private var chipsSyncGeneration: UInt64 = 0
+    private var lastSavedReminderID: String? = nil
 
     private var listPickerIsOpen: Bool = false
     private let mainInputBarHeight: CGFloat = 58
@@ -93,6 +94,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                   let title = info["title"] as? String,
                   let list  = info["list"]  as? String else { return }
             let keepOpen = (info["keepPanelOpen"] as? Bool) == true
+            self.lastSavedReminderID = info["reminderID"] as? String   // ← new
             if !keepOpen { hidePanel() }
             let rawDate = info["date"] as? String
             showToast(title: title, list: list, date: rawDate?.isEmpty == false ? rawDate : nil)
@@ -226,6 +228,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             if flags.contains(.command), event.keyCode == 43 {
                 hidePanel(); openSettingsWindow(); return nil
             }
+            
+            // ⌘Z — undo last saved task
+            if flags.contains(.command), event.keyCode == 6 {
+                guard let rid = self.lastSavedReminderID else { return event }
+                NotificationCenter.default.post(
+                    name: NSNotification.Name("UndoLastTask"),
+                    object: nil,
+                    userInfo: ["reminderID": rid]
+                )
+                self.lastSavedReminderID = nil
+                return nil
+            }
 
             // Return / Enter
             let isReturn = event.keyCode == 36 || event.keyCode == 76
@@ -334,7 +348,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.async { [weak self] in self?.syncChipsPanel() }
             return
         }
+        let dh = newH - f.size.height
         f.size.height = newH
+        f.origin.y   -= dh          // ← keep top edge fixed, same as resizeMainPanelForSearchLayout
         panel.setFrame(f, display: true, animate: false)
         DispatchQueue.main.async { [weak self] in self?.syncChipsPanel() }
     }
