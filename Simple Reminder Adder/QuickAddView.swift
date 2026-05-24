@@ -195,19 +195,18 @@ struct QuickAddView: View {
     private var mainContent: some View {
         VStack(spacing: 0) {
             if slashQuery != nil {
-                Spacer(minLength: 0)
                 ListPickerView(
                     calendars: filteredListsForPicker,
                     selectedIndex: clampedListIndex,
                     onSelectIndex: { applyListPick(at: $0) }
                 )
                 .padding(.horizontal, 6)
-                .padding(.top, 4)
+                .padding(.top, 6)
                 .padding(.bottom, listPickerSpacing)
                 .transition(
                     .asymmetric(
-                        insertion: .opacity.combined(with: .move(edge: .bottom)),
-                        removal:   .opacity.combined(with: .move(edge: .top))
+                        insertion: .opacity.combined(with: .offset(y: 8)),
+                        removal:   .opacity.combined(with: .offset(y: 8))
                     )
                 )
             }
@@ -218,17 +217,18 @@ struct QuickAddView: View {
                 SearchResultsMenuView(hits: searchHitRows)
                     .padding(.horizontal, 6)
                     .padding(.top, listPickerSpacing)
-                    .padding(.bottom, 4)
+                    .padding(.bottom, 6)
                     .transition(
                         .asymmetric(
-                            insertion: .opacity.combined(with: .move(edge: .top)),
-                            removal:   .opacity.combined(with: .move(edge: .bottom))
+                            insertion: .opacity.combined(with: .offset(y: -8)),
+                            removal:   .opacity.combined(with: .offset(y: -8))
                         )
                     )
-                Spacer(minLength: 0)
             }
         }
-        .padding(.bottom, slashQuery != nil ? 4 : 0)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: slashQuery != nil ? .bottom : .top)
+        .animation(.spring(response: 0.22, dampingFraction: 0.86), value: slashQuery != nil)
+        .animation(.spring(response: 0.22, dampingFraction: 0.86), value: isSearchMode)
         .background(
             VisualEffectView()
                 .clipShape(RoundedRectangle(cornerRadius: PanelChrome.outerCorner, style: .continuous))

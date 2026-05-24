@@ -348,11 +348,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.async { [weak self] in self?.syncChipsPanel() }
             return
         }
-        let dh = newH - f.size.height
         f.size.height = newH
-        f.origin.y   -= dh          // ← keep top edge fixed, same as resizeMainPanelForSearchLayout
-        panel.setFrame(f, display: true, animate: false)
-        DispatchQueue.main.async { [weak self] in self?.syncChipsPanel() }
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.22
+            ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.25, 0.46, 0.45, 0.94)
+            ctx.allowsImplicitAnimation = true
+            panel.animator().setFrame(f, display: true)
+        } completionHandler: { [weak self] in
+            self?.syncChipsPanel()
+        }
     }
 
     private func resizeMainPanelForSearchLayout(open: Bool, auxiliaryHeight: CGFloat) {
