@@ -6,10 +6,13 @@ struct SearchHitRowModel: Identifiable, Hashable {
     let subtitle: String
 }
 
+
 /// Vertical reminder hits below the quick-add field (search / "finder" menu pattern).
 struct SearchResultsMenuView: View {
     let hits: [SearchHitRowModel]
     var selectedIndex: Int = 0
+
+    @State private var completedRowIDs: Set<String> = []
 
     var body: some View {
         Group {
@@ -43,30 +46,59 @@ struct SearchResultsMenuView: View {
             }
         }
         .frame(minWidth: 220)
+        .onReceive(NotificationCenter.default.publisher(for: .searchCompleteSelected)) { _ in
+            guard selectedIndex >= 0, selectedIndex < hits.count else { return }
+            let hit = hits[selectedIndex]
+            triggerCompletion(hitID: hit.id)
+        }
+    }
+
+    private func triggerCompletion(hitID: String) {
+        guard !completedRowIDs.contains(hitID) else { return }
+        withAnimation(.easeOut(duration: 0.25)) {
+            _ = completedRowIDs.insert(hitID)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            NotificationCenter.default.post(
+                name: .searchResultComplete,
+                object: nil,
+                userInfo: ["id": hitID]
+            )
+            completedRowIDs.remove(hitID)
+        }
     }
 
     @ViewBuilder
     private func row(_ hit: SearchHitRowModel, isSelected: Bool) -> some View {
-        Button {
-            NotificationCenter.default.post(
-                name: .searchResultActivate,
-                object: nil,
-                userInfo: ["id": hit.id]
-            )
-        } label: {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Image(systemName: isSelected ? "checkmark.circle.fill" : "checkmark.circle")
-                    .font(.system(size: 12, weight: .semibold))
+        let isCompleted = completedRowIDs.contains(hit.id)
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Button {
+                triggerCompletion(hitID: hit.id)
+            } label: {
+                Image(systemName: isCompleted ? "checkmark.circle.fill" : (isSelected ? "checkmark.circle.fill" : "checkmark.circle"))
+                    .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(
-                        isSelected
-                            ? PanelChrome.searchAccent
-                            : PanelChrome.searchAccent.opacity(0.75)
+                        isCompleted
+                            ? Color.green
+                            : (isSelected ? PanelChrome.searchAccent : PanelChrome.searchAccent.opacity(0.75))
                     )
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                NotificationCenter.default.post(
+                    name: .searchResultActivate,
+                    object: nil,
+                    userInfo: ["id": hit.id]
+                )
+            } label: {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(hit.title)
                         .font(.system(size: 14, weight: isSelected ? .semibold : .medium, design: .rounded))
                         .foregroundStyle(.primary)
                         .lineLimit(2)
+                        .strikethrough(isCompleted, color: .primary.opacity(0.4))
                     if !hit.subtitle.isEmpty {
                         Text(hit.subtitle)
                             .font(.system(size: 11, weight: .medium, design: .rounded))
@@ -76,14 +108,15 @@ struct SearchResultsMenuView: View {
                 }
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(
-                RoundedRectangle(cornerRadius: PanelChrome.innerCorner, style: .continuous)
-                    .fill(isSelected ? PanelChrome.rowFillSelected : Color.primary.opacity(0.04))
-            )
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: PanelChrome.innerCorner, style: .continuous)
+                .fill(isSelected ? PanelChrome.rowFillSelected : Color.primary.opacity(0.04))
+        )
+        .opacity(isCompleted ? 0.35 : 1.0)
+        .animation(.easeOut(duration: 0.25), value: isCompleted)
     }
 }

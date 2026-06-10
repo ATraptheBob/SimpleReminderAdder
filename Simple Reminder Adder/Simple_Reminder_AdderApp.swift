@@ -289,6 +289,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             if isReturn {
                 if listPickerIsOpen { NotificationCenter.default.post(name: .listPickerConfirm, object: nil); return nil }
                 if searchModeIsOpen {
+                    if flags.contains(.option) || flags.contains(.control) {
+                        NotificationCenter.default.post(name: .searchCompleteSelected, object: nil)
+                        return nil
+                    }
                     NotificationCenter.default.post(name: .searchConfirm, object: nil)
                     return nil
                 }

@@ -25,6 +25,8 @@ extension Notification.Name {
     static let escapePressed               = Notification.Name("EscapePressed")
     static let hidePanelRequest            = Notification.Name("HidePanelRequest")
     static let panelDidClose               = Notification.Name("PanelDidClose")
+    static let searchResultComplete        = Notification.Name("SearchResultComplete")
+    static let searchCompleteSelected      = Notification.Name("SearchCompleteSelected")
 }
 
 // MARK: - ChipSet
@@ -215,6 +217,10 @@ struct QuickAddView: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: .panelDidClose)) { _ in
                 if dictation.isListening { dictation.stopListening() }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .searchResultComplete)) { note in
+                guard let id = note.userInfo?["id"] as? String else { return }
+                self.completeReminder(id: id)
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .chipPrioritySliderCommit)) { note in
@@ -1168,6 +1174,18 @@ struct QuickAddView: View {
             }
         }
         return (nil, nil)
+    }
+
+    private func completeReminder(id: String) {
+        guard let reminder = eventStore.calendarItem(withIdentifier: id) as? EKReminder else { return }
+        do {
+            reminder.isCompleted = true
+            try eventStore.save(reminder, commit: true)
+            ReminderHaptics.successSnap()
+            refreshSearchIndex()
+        } catch {
+            NSSound.beep()
+        }
     }
 }
 
