@@ -4,3 +4,6 @@
 ## 2024-10-24 - Pre-compiling Regexes with dynamic properties
 **Learning:** Even when regex patterns incorporate dynamic user properties (like list titles), initializing them repeatedly inside frequently invoked loops like `parseText()` during every keystroke causes significant performance lag due to regex compilation overhead.
 **Action:** When a regex pattern depends on dynamic data (like lists), compile the regular expressions once whenever that backing data changes (e.g. `onChange` or during fetch) and cache the resulting `NSRegularExpression` objects in state or local variables to reuse across subsequent operations.
+## 2024-10-25 - Caching NSDataDetector
+**Learning:** `NSDataDetector` is a subclass of `NSRegularExpression` and its initialization is equally computationally expensive. Initializing it inside a frequently invoked function (like a parser running on every keystroke) creates a significant CPU overhead.
+**Action:** Always cache instances of `NSDataDetector` as a thread-safe `static let` property if they are going to be used repeatedly.
