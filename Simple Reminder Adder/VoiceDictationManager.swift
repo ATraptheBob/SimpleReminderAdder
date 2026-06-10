@@ -8,6 +8,10 @@ internal import Combine
 final class VoiceDictationManager: ObservableObject {
     @Published private(set) var isListening = false
     @Published private(set) var transcript  = ""
+    @Published var liveAmplitude: Float = 0.0
+    
+    private var committedTranscript = ""
+    private var currentFullTranscript = ""
 
     /// Fires when a final (or silence-timeout) transcript is committed.
     let onCommit = PassthroughSubject<String, Never>()
@@ -57,6 +61,7 @@ final class VoiceDictationManager: ObservableObject {
         recognitionTask = nil
         recognitionRequest = nil
         isListening = false
+        liveAmplitude = 0.0
 
         // Commit whatever we have
         let final = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -65,17 +70,9 @@ final class VoiceDictationManager: ObservableObject {
         }
     }
 
-    func restartListening() {
-        guard isListening else { return }
-        audioEngine.stop()
-        audioEngine.inputNode.removeTap(onBus: 0)
-        recognitionRequest?.endAudio()
-        recognitionTask?.cancel()
-        
-        recognitionTask = nil
-        recognitionRequest = nil
-        
-        beginSession()
+    func markTranscriptCommitted() {
+        committedTranscript = currentFullTranscript
+        transcript = ""
     }
 
     // MARK: - Session
@@ -84,6 +81,8 @@ final class VoiceDictationManager: ObservableObject {
         guard let recognizer = speechRecognizer, recognizer.isAvailable else { return }
 
         transcript = ""
+        committedTranscript = ""
+        currentFullTranscript = ""
 
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
@@ -97,7 +96,23 @@ final class VoiceDictationManager: ObservableObject {
         let recordingFormat = inputNode.outputFormat(forBus: 0)
 
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
-            self?.recognitionRequest?.append(buffer)
+            guard let self else { return }
+            self.recognitionRequest?.append(buffer)
+            
+            // Calculate Root Mean Square (RMS) of buffer for live visualization
+            if let channelData = buffer.floatChannelData?[0] {
+                let frameCount = Int(buffer.frameLength)
+                var sum: Float = 0.0
+                for i in 0..<frameCount {
+                    let sample = channelData[i]
+                    sum += sample * sample
+                }
+                let rms = sqrt(sum / Float(frameCount))
+                DispatchQueue.main.async {
+                    // Normalize amplitude to something useful for UI (e.g. 0.0 to 1.0)
+                    self.liveAmplitude = min(1.0, max(0.0, rms * 5.0))
+                }
+            }
         }
 
         audioEngine.prepare()
@@ -115,7 +130,24 @@ final class VoiceDictationManager: ObservableObject {
 
             if let result {
                 DispatchQueue.main.async {
-                    self.transcript = result.bestTranscription.formattedString
+                    let full = result.bestTranscription.formattedString
+                    self.currentFullTranscript = full
+                    
+                    var newText = full
+                    if !self.committedTranscript.isEmpty {
+                        if newText.lowercased().hasPrefix(self.committedTranscript.lowercased()) {
+                            newText = String(newText.dropFirst(self.committedTranscript.count))
+                        } else {
+                            let committedWords = self.committedTranscript.split(separator: " ")
+                            let fullWords = full.split(separator: " ")
+                            if fullWords.count > committedWords.count {
+                                newText = fullWords.dropFirst(committedWords.count).joined(separator: " ")
+                            } else {
+                                newText = ""
+                            }
+                        }
+                    }
+                    self.transcript = newText.trimmingCharacters(in: .whitespaces)
                 }
             }
 
@@ -131,5 +163,6 @@ final class VoiceDictationManager: ObservableObject {
         recognitionRequest = nil
         recognitionTask = nil
         isListening = false
+        liveAmplitude = 0.0
     }
 }

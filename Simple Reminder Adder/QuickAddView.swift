@@ -22,6 +22,9 @@ extension Notification.Name {
     static let toggleDictation             = Notification.Name("ToggleDictation")
     static let searchNavigate              = Notification.Name("SearchNavigate")
     static let searchConfirm               = Notification.Name("SearchConfirm")
+    static let escapePressed               = Notification.Name("EscapePressed")
+    static let hidePanelRequest            = Notification.Name("HidePanelRequest")
+    static let panelDidClose               = Notification.Name("PanelDidClose")
 }
 
 // MARK: - ChipSet
@@ -201,6 +204,17 @@ struct QuickAddView: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: .searchConfirm)) { _ in
                 activateSearchSelection()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .escapePressed)) { _ in
+                if !taskText.isEmpty || dictation.isListening {
+                    taskText = ""
+                    if dictation.isListening { dictation.stopListening() }
+                } else {
+                    NotificationCenter.default.post(name: .hidePanelRequest, object: nil)
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .panelDidClose)) { _ in
+                if dictation.isListening { dictation.stopListening() }
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .chipPrioritySliderCommit)) { note in
@@ -431,6 +445,34 @@ struct QuickAddView: View {
                 }
                 .allowsHitTesting(false)
             }
+
+            // Dictation Waveform Visualizer
+            if dictation.isListening {
+                HStack(spacing: 3) {
+                    Spacer()
+                    ForEach(0..<16, id: \.self) { i in
+                        let multiplier = CGFloat(sin(Double(i) * 0.5) * 0.35 + 0.65)
+                        let rawHeight = CGFloat(dictation.liveAmplitude) * 20 * multiplier
+                        let h = max(2.5, min(24, rawHeight))
+                        Capsule()
+                            .fill(
+                                LinearGradient(
+                                    colors: [Color.red.opacity(0.75), PanelChrome.accentColor.opacity(0.85)],
+                                    startPoint: .bottom,
+                                    endPoint: .top
+                                )
+                            )
+                            .frame(width: 3, height: h)
+                            .animation(.interactiveSpring(response: 0.12, dampingFraction: 0.65), value: dictation.liveAmplitude)
+                    }
+                    Spacer()
+                }
+                .frame(height: 28)
+                .frame(maxHeight: .infinity, alignment: .bottom)
+                .padding(.bottom, 4)
+                .allowsHitTesting(false)
+                .transition(.opacity.combined(with: .scale(scale: 0.95)))
+            }
         }
         .frame(height: inputBarHeight, alignment: .center)
         .clipped()
@@ -439,6 +481,25 @@ struct QuickAddView: View {
         }
         .overlay(alignment: .trailing) {
             HStack(spacing: 6) {
+                // Default-list destination pill — moved here to prevent clipping
+                if showDefaultPill, let defaultName = lists.first?.title {
+                    HStack(spacing: 3) {
+                        Image(systemName: "arrow.right.circle")
+                            .font(.system(size: 9, weight: .semibold))
+                        Text(defaultName)
+                            .font(.system(size: 10, weight: .medium, design: .rounded))
+                    }
+                    .foregroundStyle(PanelChrome.listAccent.opacity(0.45))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(
+                        Capsule().fill(PanelChrome.listAccent.opacity(0.07))
+                    )
+                    .overlay(Capsule().stroke(PanelChrome.listAccent.opacity(0.13), lineWidth: 0.5))
+                    .transition(.opacity.combined(with: .scale(scale: 0.85, anchor: .trailing)))
+                    .animation(.easeOut(duration: 0.15), value: showDefaultPill)
+                }
+
                 // Microphone button for voice dictation
                 if !isSearchMode {
                     Button {
@@ -499,30 +560,6 @@ struct QuickAddView: View {
                 }
             }
             .padding(.trailing, 14)
-        }
-        // Default-list destination pill — shows when no list is explicitly parsed
-        .overlay(alignment: .bottomTrailing) {
-            if showDefaultPill, let defaultName = lists.first?.title {
-                HStack(spacing: 3) {
-                    Image(systemName: "arrow.right.circle")
-                        .font(.system(size: 9, weight: .semibold))
-                    Text(defaultName)
-                        .font(.system(size: 10, weight: .medium, design: .rounded))
-                }
-                .foregroundStyle(PanelChrome.listAccent.opacity(0.45))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-                .background(
-                    Capsule().fill(PanelChrome.listAccent.opacity(0.07))
-                )
-                .overlay(Capsule().stroke(PanelChrome.listAccent.opacity(0.13), lineWidth: 0.5))
-                .padding(.trailing, 10)
-                .padding(.bottom, 6)
-                .transition(.opacity.combined(with: .scale(scale: 0.85, anchor: .bottomTrailing)))
-                // ANIMATION FIX: animate on the stable bool `showDefaultPill` instead of
-                // `taskText.isEmpty` which re-fires on every keystroke
-                .animation(.easeOut(duration: 0.15), value: showDefaultPill)
-            }
         }
     }
 
@@ -822,7 +859,7 @@ struct QuickAddView: View {
         // Stop dictation on save, or restart if keeping panel open
         if dictation.isListening {
             if keepPanelOpen {
-                dictation.restartListening()
+                dictation.markTranscriptCommitted()
             } else {
                 dictation.stopListening()
             }

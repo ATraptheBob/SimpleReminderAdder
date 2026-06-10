@@ -148,6 +148,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self?.syncChipsPanel()
         }
 
+        NotificationCenter.default.addObserver(
+            forName: NSNotification.Name("HidePanelRequest"),
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.hidePanel()
+        }
+
         showPanel()
     }
 
@@ -245,7 +252,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     NotificationCenter.default.post(name: .forceExitSearchMode, object: nil)
                     return nil
                 }
-                hidePanel(); return nil
+                NotificationCenter.default.post(name: NSNotification.Name("EscapePressed"), object: nil)
+                return nil
             }
 
             // ⌘F — search toggle
@@ -319,6 +327,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         NotificationCenter.default.post(name: .forceExitSearchMode, object: nil)
         listPickerIsOpen  = false
         searchModeIsOpen  = false
+        NotificationCenter.default.post(name: NSNotification.Name("PanelDidClose"), object: nil)
 
         if !panel.isVisible { finalizePanelHide(); return }
 
