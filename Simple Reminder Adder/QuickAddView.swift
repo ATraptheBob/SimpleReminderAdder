@@ -76,6 +76,7 @@ struct QuickAddView: View {
 
     @State private var taskText: String = ""
     @State private var lists: [EKCalendar] = []
+    @State private var listRegexCache: [(EKCalendar, NSRegularExpression)] = []
     @FocusState private var isInputFocused: Bool
 
     @State private var parsedDate: Date?        = nil
@@ -852,10 +853,11 @@ struct QuickAddView: View {
         else if taskText.hasPrefix("!!")  { parsedPriority = 5; parsedPriorityString = "!!" }
         else if taskText.hasPrefix("!")   { parsedPriority = 9; parsedPriorityString = "!" }
 
-        for list in lists {
-            let escapedListTitle = NSRegularExpression.escapedPattern(for: list.title)
-            let pattern = "(?i)\\b(?:in|to)\\s+\(escapedListTitle)\\b"
-            if let range = taskText.range(of: pattern, options: .regularExpression) {
+        let nsText = taskText as NSString
+        let fullRange = NSRange(location: 0, length: nsText.length)
+        for (list, regex) in listRegexCache {
+            if let match = regex.firstMatch(in: taskText, options: [], range: fullRange),
+               let range = Range(match.range, in: taskText) {
                 parsedList       = list
                 parsedListString = String(taskText[range])
                 break
@@ -1220,8 +1222,20 @@ struct QuickAddView: View {
             do {
                 if #available(macOS 14.0, *) { try await eventStore.requestFullAccessToReminders() }
                 else { try await eventStore.requestAccess(to: .reminder) }
-                await MainActor.run { self.lists = eventStore.calendars(for: .reminder) }
+                await MainActor.run {
+                    self.lists = eventStore.calendars(for: .reminder)
+                    self.precompileListRegexes(for: self.lists)
+                }
             } catch { print("Permission error: \(error)") }
+        }
+    }
+
+    private func precompileListRegexes(for calendars: [EKCalendar]) {
+        self.listRegexCache = calendars.compactMap { list in
+            let escapedListTitle = NSRegularExpression.escapedPattern(for: list.title)
+            let pattern = "(?i)\\b(?:in|to)\\s+\(escapedListTitle)\\b"
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+            return (list, regex)
         }
     }
     
