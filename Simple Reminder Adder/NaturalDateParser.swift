@@ -8,6 +8,80 @@ struct NaturalDateParseResult: Equatable {
 }
 
 enum NaturalDateParser {
+
+    // ────────────────────────────────────────────────────────────
+    // MARK: - Pre-compiled regexes (created once, reused on every keystroke)
+    // ────────────────────────────────────────────────────────────
+
+    private struct LexicalPattern {
+        let regex: NSRegularExpression
+        let builder: (Date, Calendar) -> NaturalDateParseResult
+    }
+
+    private static let lexicalPatterns: [LexicalPattern] = {
+        func re(_ p: String) -> NSRegularExpression { try! NSRegularExpression(pattern: p) }
+
+        return [
+            LexicalPattern(regex: re(#"(?i)\bday after tomorrow\b"#))       { now, cal in dayAfterTomorrowAt(hour: 9, minute: 0, reference: now, cal: cal) },
+            LexicalPattern(regex: re(#"(?i)\btomorrow morning\b"#))         { now, cal in tomorrowAt(hour: 9, minute: 0, reference: now, cal: cal) },
+            LexicalPattern(regex: re(#"(?i)\btomorrow afternoon\b"#))       { now, cal in tomorrowAt(hour: 14, minute: 0, reference: now, cal: cal) },
+            LexicalPattern(regex: re(#"(?i)\btomorrow evening\b"#))         { now, cal in tomorrowAt(hour: 19, minute: 0, reference: now, cal: cal) },
+            LexicalPattern(regex: re(#"(?i)\btomorrow\b"#))                 { now, cal in tomorrowAt(hour: 9, minute: 0, reference: now, cal: cal) },
+            LexicalPattern(regex: re(#"(?i)\bthis evening\b"#))             { now, cal in thisEveningResult(reference: now, cal: cal) },
+            LexicalPattern(regex: re(#"(?i)\btonight\b"#))                  { now, cal in tonightResult(reference: now, cal: cal) },
+            LexicalPattern(regex: re(#"(?i)\bthis afternoon\b"#))           { now, cal in dayPartResult(reference: now, cal: cal, hour: 14, minute: 0) },
+            LexicalPattern(regex: re(#"(?i)\bthis morning\b"#))             { now, cal in dayPartResult(reference: now, cal: cal, hour: 9, minute: 0) },
+            LexicalPattern(regex: re(#"(?i)\bthis weekend\b"#))             { now, cal in weekendResult(offsetWeeks: 0, reference: now, cal: cal) },
+            LexicalPattern(regex: re(#"(?i)\bnext weekend\b"#))             { now, cal in weekendResult(offsetWeeks: 1, reference: now, cal: cal) },
+            LexicalPattern(regex: re(#"(?i)\bnext week\b"#))                { now, cal in offsetDays(7, atHour: 9, minute: 0, reference: now, cal: cal) },
+            LexicalPattern(regex: re(#"(?i)\bnext month\b"#))               { now, cal in offsetMonths(1, atHour: 9, minute: 0, reference: now, cal: cal) },
+            LexicalPattern(regex: re(#"(?i)\bnext year\b"#))                { now, cal in offsetYears(1, atHour: 9, minute: 0, reference: now, cal: cal) },
+            LexicalPattern(regex: re(#"(?i)\bend of day\b"#))               { now, cal in todayAt(hour: 17, minute: 0, reference: now, cal: cal, rollForwardIfPast: true) },
+            LexicalPattern(regex: re(#"(?i)\beod\b"#))                      { now, cal in todayAt(hour: 17, minute: 0, reference: now, cal: cal, rollForwardIfPast: true) },
+            LexicalPattern(regex: re(#"(?i)\bclose of business\b"#))        { now, cal in fridaySameWeekAt(hour: 17, minute: 0, reference: now, cal: cal) },
+            LexicalPattern(regex: re(#"(?i)\bcob\b"#))                      { now, cal in fridaySameWeekAt(hour: 17, minute: 0, reference: now, cal: cal) },
+            LexicalPattern(regex: re(#"(?i)\bend of week\b"#))              { now, cal in fridaySameWeekAt(hour: 17, minute: 0, reference: now, cal: cal) },
+            LexicalPattern(regex: re(#"(?i)\bend of month\b"#))             { now, cal in endOfMonthResult(reference: now, cal: cal) },
+            LexicalPattern(regex: re(#"(?i)\bmidday\b"#))                   { now, cal in todayAt(hour: 12, minute: 0, reference: now, cal: cal, rollForwardIfPast: true) },
+            LexicalPattern(regex: re(#"(?i)\bnoon\b"#))                     { now, cal in todayAt(hour: 12, minute: 0, reference: now, cal: cal, rollForwardIfPast: true) },
+            LexicalPattern(regex: re(#"(?i)\bmidnight\b"#))                 { now, cal in endOfToday(reference: now, cal: cal) },
+            LexicalPattern(regex: re(#"(?i)\blater today\b"#))              { now, cal in offsetHours(4, reference: now, cal: cal) },
+            LexicalPattern(regex: re(#"(?i)\blater\b"#))                    { now, cal in offsetHours(4, reference: now, cal: cal) },
+            LexicalPattern(regex: re(#"(?i)\bin a week\b"#))                { now, cal in offsetDays(7, atHour: 9, minute: 0, reference: now, cal: cal) },
+            LexicalPattern(regex: re(#"(?i)\bin a month\b"#))               { now, cal in offsetMonths(1, atHour: 9, minute: 0, reference: now, cal: cal) },
+            LexicalPattern(regex: re(#"(?i)\bin a year\b"#))                { now, cal in offsetYears(1, atHour: 9, minute: 0, reference: now, cal: cal) },
+        ]
+    }()
+
+    private static let nextWeekdayRegex = try! NSRegularExpression(
+        pattern: #"(?i)\bnext\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b"#
+    )
+    private static let bareWeekdayRegex = try! NSRegularExpression(
+        pattern: #"(?i)(?<!next )\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b"#
+    )
+
+    // Relative-time patterns — pre-compiled
+    private struct FuzzyPattern {
+        let regex: NSRegularExpression
+        let offset: (Date, Calendar) -> Date?
+    }
+    private static let fuzzyPatterns: [FuzzyPattern] = {
+        func re(_ p: String) -> NSRegularExpression { try! NSRegularExpression(pattern: p) }
+        return [
+            FuzzyPattern(regex: re(#"(?i)\bin\s+a\s+couple\s+of\s+hours?\b"#)) { now, cal in cal.date(byAdding: .hour, value: 2, to: now) },
+            FuzzyPattern(regex: re(#"(?i)\bin\s+a\s+few\s+hours?\b"#))         { now, cal in cal.date(byAdding: .hour, value: 3, to: now) },
+            FuzzyPattern(regex: re(#"(?i)\bin\s+half\s+an?\s+hour\b"#))        { now, cal in cal.date(byAdding: .minute, value: 30, to: now) },
+            FuzzyPattern(regex: re(#"(?i)\bin\s+an?\s+hour\b"#))               { now, cal in cal.date(byAdding: .hour, value: 1, to: now) },
+        ]
+    }()
+    private static let numericRelativeRegex = try! NSRegularExpression(
+        pattern: #"(?i)\bin\s+(\d+)\s*(hours?|hrs?|h\b|minutes?|mins?|m\b|days?|d\b|weeks?|w\b|months?|years?|y\b)\b"#
+    )
+
+    // ────────────────────────────────────────────────────────────
+    // MARK: - Public
+    // ────────────────────────────────────────────────────────────
+
     static func parse(text: String, reference now: Date = Date()) -> NaturalDateParseResult {
         var best: NaturalDateParseResult?
 
@@ -53,46 +127,14 @@ enum NaturalDateParser {
             }
         }
 
-        let phrasePairs: [(String, NaturalDateParseResult)] = [
-            (#"(?i)\bday after tomorrow\b"#, dayAfterTomorrowAt(hour: 9, minute: 0, reference: now, cal: cal)),
-            (#"(?i)\btomorrow morning\b"#, tomorrowAt(hour: 9, minute: 0, reference: now, cal: cal)),
-            (#"(?i)\btomorrow afternoon\b"#, tomorrowAt(hour: 14, minute: 0, reference: now, cal: cal)),
-            (#"(?i)\btomorrow evening\b"#, tomorrowAt(hour: 19, minute: 0, reference: now, cal: cal)),
-            (#"(?i)\btomorrow\b"#, tomorrowAt(hour: 9, minute: 0, reference: now, cal: cal)),
-            (#"(?i)\bthis evening\b"#, thisEveningResult(reference: now, cal: cal)),
-            (#"(?i)\btonight\b"#, tonightResult(reference: now, cal: cal)),
-            (#"(?i)\bthis afternoon\b"#, dayPartResult(reference: now, cal: cal, hour: 14, minute: 0)),
-            (#"(?i)\bthis morning\b"#, dayPartResult(reference: now, cal: cal, hour: 9, minute: 0)),
-            (#"(?i)\bthis weekend\b"#, weekendResult(offsetWeeks: 0, reference: now, cal: cal)),
-            (#"(?i)\bnext weekend\b"#, weekendResult(offsetWeeks: 1, reference: now, cal: cal)),
-            (#"(?i)\bnext week\b"#, offsetDays(7, atHour: 9, minute: 0, reference: now, cal: cal)),
-            (#"(?i)\bnext month\b"#, offsetMonths(1, atHour: 9, minute: 0, reference: now, cal: cal)),
-            (#"(?i)\bnext year\b"#, offsetYears(1, atHour: 9, minute: 0, reference: now, cal: cal)),
-            (#"(?i)\bend of day\b"#, todayAt(hour: 17, minute: 0, reference: now, cal: cal, rollForwardIfPast: true)),
-            (#"(?i)\beod\b"#, todayAt(hour: 17, minute: 0, reference: now, cal: cal, rollForwardIfPast: true)),
-            (#"(?i)\bclose of business\b"#, fridaySameWeekAt(hour: 17, minute: 0, reference: now, cal: cal)),
-            (#"(?i)\bcob\b"#, fridaySameWeekAt(hour: 17, minute: 0, reference: now, cal: cal)),
-            (#"(?i)\bend of week\b"#, fridaySameWeekAt(hour: 17, minute: 0, reference: now, cal: cal)),
-            (#"(?i)\bend of month\b"#, endOfMonthResult(reference: now, cal: cal)),
-            (#"(?i)\bmidday\b"#, todayAt(hour: 12, minute: 0, reference: now, cal: cal, rollForwardIfPast: true)),
-            (#"(?i)\bnoon\b"#, todayAt(hour: 12, minute: 0, reference: now, cal: cal, rollForwardIfPast: true)),
-            (#"(?i)\bmidnight\b"#, endOfToday(reference: now, cal: cal)),
-            (#"(?i)\blater today\b"#, offsetHours(4, reference: now, cal: cal)),
-            (#"(?i)\blater\b"#, offsetHours(4, reference: now, cal: cal)),
-            (#"(?i)\bin a week\b"#, offsetDays(7, atHour: 9, minute: 0, reference: now, cal: cal)),
-            (#"(?i)\bin a month\b"#, offsetMonths(1, atHour: 9, minute: 0, reference: now, cal: cal)),
-            (#"(?i)\bin a year\b"#, offsetYears(1, atHour: 9, minute: 0, reference: now, cal: cal)),
-        ]
-
-        for (pattern, result) in phrasePairs {
-            guard let re = try? NSRegularExpression(pattern: pattern),
-                  let m = re.firstMatch(in: text, options: [], range: full),
+        // Iterate pre-compiled patterns (no regex compilation per call)
+        for entry in lexicalPatterns {
+            guard let m = entry.regex.firstMatch(in: text, options: [], range: full),
                   let r = Range(m.range, in: text) else { continue }
-            take(r, result)
+            take(r, entry.builder(now, cal))
         }
 
-        if let re = try? NSRegularExpression(pattern: #"(?i)\bnext\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b"#),
-           let m = re.firstMatch(in: text, options: [], range: full),
+        if let m = nextWeekdayRegex.firstMatch(in: text, options: [], range: full),
            let r = Range(m.range, in: text) {
             let w = ns.substring(with: m.range(at: 1)).lowercased()
             if let wd = weekdayIndex(from: w),
@@ -101,8 +143,7 @@ enum NaturalDateParser {
             }
         }
 
-        if let re = try? NSRegularExpression(pattern: #"(?i)(?<!next )\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b"#),
-           let m = re.firstMatch(in: text, options: [], range: full),
+        if let m = bareWeekdayRegex.firstMatch(in: text, options: [], range: full),
            let r = Range(m.range, in: text) {
             let w = ns.substring(with: m.range(at: 1)).lowercased()
             if let wd = weekdayIndex(from: w),
@@ -246,7 +287,8 @@ enum NaturalDateParser {
         var dc = DateComponents()
         dc.hour = 9
         dc.minute = 0
-        let d = cal.date(byAdding: dc, to: target)
+        // BUG FIX: normalize to startOfDay before adding hours, preventing double-hour stacking
+        let d = cal.date(byAdding: dc, to: cal.startOfDay(for: target))
         return NaturalDateParseResult(date: d, matchedSubstring: nil, hasDateComponent: true, hasTimeComponent: true)
     }
 
@@ -353,23 +395,16 @@ enum NaturalDateParser {
         let ns = text as NSString
         let full = NSRange(location: 0, length: ns.length)
 
-        let fuzzy: [(String, Date?)] = [
-            (#"(?i)\bin\s+a\s+couple\s+of\s+hours?\b"#, cal.date(byAdding: .hour, value: 2, to: now)),
-            (#"(?i)\bin\s+a\s+few\s+hours?\b"#, cal.date(byAdding: .hour, value: 3, to: now)),
-            (#"(?i)\bin\s+half\s+an?\s+hour\b"#, cal.date(byAdding: .minute, value: 30, to: now)),
-            (#"(?i)\bin\s+an?\s+hour\b"#, cal.date(byAdding: .hour, value: 1, to: now)),
-        ]
-        for (pat, date) in fuzzy {
-            guard let re = try? NSRegularExpression(pattern: pat),
-                  let m = re.firstMatch(in: text, options: [], range: full),
+        // Pre-compiled fuzzy patterns
+        for entry in fuzzyPatterns {
+            guard let m = entry.regex.firstMatch(in: text, options: [], range: full),
                   let r = Range(m.range, in: text),
-                  let d = date else { continue }
+                  let d = entry.offset(now, cal) else { continue }
             return NaturalDateParseResult(date: d, matchedSubstring: String(text[r]), hasDateComponent: false, hasTimeComponent: true)
         }
 
-        let pattern = #"(?i)\bin\s+(\d+)\s*(hours?|hrs?|h\b|minutes?|mins?|m\b|days?|d\b|weeks?|w\b|months?|years?|y\b)\b"#
-        guard let re = try? NSRegularExpression(pattern: pattern),
-              let m = re.firstMatch(in: text, range: full),
+        // Pre-compiled numeric relative regex
+        guard let m = numericRelativeRegex.firstMatch(in: text, range: full),
               let r = Range(m.range, in: text) else { return nil }
 
         guard m.numberOfRanges >= 3,

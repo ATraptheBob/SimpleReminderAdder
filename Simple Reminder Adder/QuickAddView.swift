@@ -18,7 +18,10 @@ extension Notification.Name {
     static let chipSwipeDelete             = Notification.Name("ChipSwipeDelete")
     static let chipSwipeDuplicate          = Notification.Name("ChipSwipeDuplicate")
     static let chipsLayoutChanged          = Notification.Name("ChipsLayoutChanged")
-    static let undoLastTask = Notification.Name("UndoLastTask")
+    static let undoLastTask                = Notification.Name("UndoLastTask")
+    static let toggleDictation             = Notification.Name("ToggleDictation")
+    static let searchNavigate              = Notification.Name("SearchNavigate")
+    static let searchConfirm               = Notification.Name("SearchConfirm")
 }
 
 // MARK: - ChipSet
@@ -32,10 +35,28 @@ private struct ChipSet: Equatable {
     var showTimePill: Bool
     var listName: String?
 }
+private struct SearchIndexRow: Identifiable, Hashable {
+    let id: String
+    let title: String
+    let subtitle: String
+    let searchText: String
+    let dueDate: Date?
+}
 
 private let inputBarHeight: CGFloat = 58
 private let listPickerSpacing: CGFloat = 6
 private let listPickerMaxScroll: CGFloat = 220
+
+// MARK: - Cached DateFormatter (created once, reused everywhere)
+private let sharedDateFormatter: DateFormatter = {
+    let fmt = DateFormatter()
+    fmt.dateStyle = .short
+    fmt.timeStyle = .short
+    return fmt
+}()
+
+// MARK: - Max search index size (prevents unbounded memory for power users)
+private let searchIndexMaxEntries = 500
 
 struct QuickAddView: View {
     private let eventStore = EKEventStore()
@@ -67,6 +88,12 @@ struct QuickAddView: View {
     @State private var composeDraft: String = ""
     @State private var searchHitRows: [SearchHitRowModel] = []
     @State private var searchDebounceTask: Task<Void, Never>?
+    @State private var searchIndexRows: [SearchIndexRow] = []
+    @State private var searchIndexTask: Task<Void, Never>?
+    @State private var searchSelectedIndex: Int = 0
+
+    // Voice dictation
+    @StateObject private var dictation = VoiceDictationManager()
 
     private var slashQuery: (base: String, filter: String)? {
         if isSearchMode { return nil }
@@ -83,7 +110,12 @@ struct QuickAddView: View {
     private var searchPanelAuxiliaryHeight: CGFloat {
         guard isSearchMode else { return 0 }
         if searchHitRows.isEmpty { return 96 }
-        return min(260, 12 + CGFloat(searchHitRows.count) * 42 + 20)
+        return min(260, 12 + CGFloat(searchHitRows.count) * 48 + 20)
+    }
+
+    /// Computed bool for the default-list pill — only flips when visibility actually changes.
+    private var showDefaultPill: Bool {
+        !isSearchMode && slashQuery == nil && parsedList == nil && !taskText.isEmpty
     }
 
     private func postMainPanelSearchLayout() {
@@ -150,12 +182,25 @@ struct QuickAddView: View {
                     taskText = composeDraft
                     composeDraft = ""
                     searchHitRows = []
+                    searchIndexRows = []
+                    searchIndexTask?.cancel()
+                    searchDebounceTask?.cancel()
                     postMainPanelSearchLayout()
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .searchResultActivate)) { note in
                 guard let id = note.userInfo?["id"] as? String else { return }
                 openReminderInRemindersApp(id: id)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .toggleDictation)) { _ in
+                handleDictationToggle()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .searchNavigate)) { note in
+                guard let d = note.userInfo?["delta"] as? Int else { return }
+                moveSearchSelection(delta: d)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .searchConfirm)) { _ in
+                activateSearchSelection()
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .chipPrioritySliderCommit)) { note in
@@ -188,6 +233,11 @@ struct QuickAddView: View {
                 NSSound.beep()
             }
         }
+        // Stream dictation transcript into the text field
+        .onReceive(dictation.$transcript) { text in
+            guard dictation.isListening, !text.isEmpty else { return }
+            taskText = text
+        }
     }
 
     // MARK: - Body
@@ -214,7 +264,7 @@ struct QuickAddView: View {
             inputBarContent
 
             if isSearchMode {
-                SearchResultsMenuView(hits: searchHitRows)
+                SearchResultsMenuView(hits: searchHitRows, selectedIndex: searchSelectedIndex)
                     .padding(.horizontal, 6)
                     .padding(.top, listPickerSpacing)
                     .padding(.bottom, 6)
@@ -227,12 +277,10 @@ struct QuickAddView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: slashQuery != nil ? .bottom : .top)
-        .animation(.spring(response: 0.22, dampingFraction: 0.86), value: slashQuery != nil)
-        .animation(.spring(response: 0.22, dampingFraction: 0.86), value: isSearchMode)
-        .background(
-            VisualEffectView()
-                .clipShape(RoundedRectangle(cornerRadius: PanelChrome.outerCorner, style: .continuous))
-        )
+        // ANIMATION FIX: removed broad .animation() modifiers that caused spillover animations
+        // on every keystroke. Transitions are now driven by explicit withAnimation in handlers.
+        .background(VisualEffectView())
+        .clipShape(RoundedRectangle(cornerRadius: PanelChrome.outerCorner, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: PanelChrome.outerCorner, style: .continuous)
                 .stroke(PanelChrome.strokeSubtle, lineWidth: 1)
@@ -242,17 +290,21 @@ struct QuickAddView: View {
     // MARK: - Handlers
 
     private func handleTaskTextChange(_ new: String) {
-        let open = !isSearchMode && (listSlashQuery(from: new) != nil)
+        // BUG FIX: call listSlashQuery once and reuse the result
+        let currentSlash = listSlashQuery(from: new)
+        let open = !isSearchMode && (currentSlash != nil)
         if open != listPickerLayoutOpenState {
             if open { listPickerIndex = 0 }
             listPickerLayoutOpenState = open
-            NotificationCenter.default.post(
-                name: .mainPanelListPickerLayout,
-                object: nil,
-                userInfo: ["open": open]
-            )
+            withAnimation(.spring(response: 0.22, dampingFraction: 0.86)) {
+                NotificationCenter.default.post(
+                    name: .mainPanelListPickerLayout,
+                    object: nil,
+                    userInfo: ["open": open]
+                )
+            }
         }
-        syncListPickerAfterTextChange(new)
+        syncListPickerAfterTextChange(new, slashResult: currentSlash)
         parseText()
         updateSuggestion()
         postIfChipsChanged()
@@ -262,11 +314,17 @@ struct QuickAddView: View {
     private func handleSearchModeChange(_ active: Bool) {
         notifySearchModePresence(active: active)
         if active {
+            searchSelectedIndex = 0
             searchHitRows = []
+            searchIndexRows = []
+            refreshSearchIndex()
             scheduleSearchRefresh()
         } else {
             searchDebounceTask?.cancel()
+            searchIndexTask?.cancel()
             searchHitRows = []
+            searchIndexRows = []
+            searchSelectedIndex = 0
         }
         postMainPanelSearchLayout()
     }
@@ -277,6 +335,8 @@ struct QuickAddView: View {
         composeDraft = ""
         searchHitRows = []
         searchDebounceTask?.cancel()
+        searchIndexRows = []
+        searchIndexTask?.cancel()
         notifySearchModePresence(active: false)
         postMainPanelSearchLayout()
         listPickerLayoutOpenState = listSlashQuery(from: taskText) != nil
@@ -287,6 +347,8 @@ struct QuickAddView: View {
                 userInfo: ["open": true]
             )
         }
+        // Stop dictation if panel re-opened
+        if dictation.isListening { dictation.stopListening() }
         isInputFocused = false
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
             isInputFocused = true
@@ -300,6 +362,13 @@ struct QuickAddView: View {
         return min(max(0, listPickerIndex), n - 1)
     }
 
+    // MARK: - Voice dictation
+
+    private func handleDictationToggle() {
+        guard !isSearchMode else { return }
+        dictation.toggle()
+    }
+
     // MARK: - Input bar
 
     private var inputBarContent: some View {
@@ -308,10 +377,11 @@ struct QuickAddView: View {
                 Text(
                     isSearchMode
                         ? "Search reminders…  ·  ⌘F to close"
-                        : "Task…  ·  ⌘F search  ·  ⇧⏎ save & keep  ·  space + / for lists"
+                        : "Task…  ·  ⌘F search  ·  ⇧⏎ keep open"
                 )
                 .font(.system(size: 18, weight: .light, design: .rounded))
                 .foregroundColor(.primary.opacity(0.30))
+                .lineLimit(1)
                 .allowsHitTesting(false)
                 .padding(.horizontal, 22)
             }
@@ -324,12 +394,14 @@ struct QuickAddView: View {
                         .foregroundColor(.primary.opacity(0.22))
                 }
                 .font(.system(size: 20, weight: .light, design: .rounded))
+                .lineLimit(1)
                 .allowsHitTesting(false)
                 .padding(.horizontal, 22)
             }
 
             Text(styledText(from: taskText))
                 .font(.system(size: 20, weight: .light, design: .rounded))
+                .lineLimit(1)
                 .allowsHitTesting(false)
                 .padding(.horizontal, 22)
 
@@ -338,6 +410,7 @@ struct QuickAddView: View {
                 .font(.system(size: 20, weight: .light, design: .rounded))
                 .foregroundColor(.clear)
                 .tint(.primary.opacity(0.6))
+                .lineLimit(1)
                 .focused($isInputFocused)
                 .onSubmit {
                     if !isSearchMode { saveTask(keepPanelOpen: false) }
@@ -357,30 +430,76 @@ struct QuickAddView: View {
                 .allowsHitTesting(false)
             }
         }
-        .frame(height: inputBarHeight)
+        .frame(height: inputBarHeight, alignment: .center)
+        .clipped()
+        .transaction { transaction in
+            transaction.animation = nil
+        }
         .overlay(alignment: .trailing) {
-            if dripSessionCount > 0 {
-                HStack(spacing: 3) {
-                    ForEach(0..<min(dripSessionCount, 6), id: \.self) { _ in
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary.opacity(0.5))
+            HStack(spacing: 6) {
+                // Microphone button for voice dictation
+                if !isSearchMode {
+                    Button {
+                        handleDictationToggle()
+                    } label: {
+                        ZStack {
+                            if dictation.isListening {
+                                // Pulsing ring while listening
+                                Circle()
+                                    .stroke(Color.red.opacity(0.35), lineWidth: 2)
+                                    .scaleEffect(1.6)
+                                    .opacity(0)
+                                    .animation(
+                                        .easeOut(duration: 1.2).repeatForever(autoreverses: false),
+                                        value: dictation.isListening
+                                    )
+                                Circle()
+                                    .stroke(Color.red.opacity(0.5), lineWidth: 1.5)
+                                    .scaleEffect(dictation.isListening ? 1.35 : 1.0)
+                                    .opacity(dictation.isListening ? 0 : 1)
+                                    .animation(
+                                        .easeInOut(duration: 0.8).repeatForever(autoreverses: true),
+                                        value: dictation.isListening
+                                    )
+                            }
+                            Image(systemName: dictation.isListening ? "mic.fill" : "mic")
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(
+                                    dictation.isListening
+                                        ? Color.red.opacity(0.9)
+                                        : Color.primary.opacity(0.35)
+                                )
+                                .scaleEffect(dictation.isListening ? 1.1 : 1.0)
+                                .animation(.spring(response: 0.2, dampingFraction: 0.7), value: dictation.isListening)
+                        }
+                        .frame(width: 24, height: 24)
                     }
-                    if dripSessionCount > 6 {
-                        Text("+\(dripSessionCount - 6)")
-                            .font(.system(size: 10, weight: .semibold, design: .rounded))
-                            .foregroundStyle(.secondary.opacity(0.55))
-                    }
+                    .buttonStyle(.plain)
+                    .help("Voice dictation (⌘D)")
                 }
-                .padding(.trailing, 14)
-                .transition(.opacity.combined(with: .scale(scale: 0.8)))
-                .animation(.spring(response: 0.15, dampingFraction: 0.8), value: dripSessionCount)
+
+                if dripSessionCount > 0 {
+                    HStack(spacing: 3) {
+                        ForEach(0..<min(dripSessionCount, 6), id: \.self) { _ in
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary.opacity(0.5))
+                        }
+                        if dripSessionCount > 6 {
+                            Text("+\(dripSessionCount - 6)")
+                                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                                .foregroundStyle(.secondary.opacity(0.55))
+                        }
+                    }
+                    .transition(.opacity.combined(with: .scale(scale: 0.8)))
+                    .animation(.spring(response: 0.15, dampingFraction: 0.8), value: dripSessionCount)
+                }
             }
+            .padding(.trailing, 14)
         }
         // Default-list destination pill — shows when no list is explicitly parsed
         .overlay(alignment: .bottomTrailing) {
-            if !isSearchMode, slashQuery == nil, parsedList == nil, !taskText.isEmpty,
-               let defaultName = lists.first?.title {
+            if showDefaultPill, let defaultName = lists.first?.title {
                 HStack(spacing: 3) {
                     Image(systemName: "arrow.right.circle")
                         .font(.system(size: 9, weight: .semibold))
@@ -397,7 +516,9 @@ struct QuickAddView: View {
                 .padding(.trailing, 10)
                 .padding(.bottom, 6)
                 .transition(.opacity.combined(with: .scale(scale: 0.85, anchor: .bottomTrailing)))
-                .animation(.easeOut(duration: 0.15), value: taskText.isEmpty)
+                // ANIMATION FIX: animate on the stable bool `showDefaultPill` instead of
+                // `taskText.isEmpty` which re-fires on every keystroke
+                .animation(.easeOut(duration: 0.15), value: showDefaultPill)
             }
         }
     }
@@ -416,11 +537,12 @@ struct QuickAddView: View {
         return (base, filter.lowercased())
     }
 
-    private func syncListPickerAfterTextChange(_ newText: String) {
+    // BUG FIX: accept pre-computed slashResult to avoid re-calling listSlashQuery
+    private func syncListPickerAfterTextChange(_ newText: String, slashResult: (base: String, filter: String)?) {
         if isSearchMode { listPickerIndex = 0; return }
-        guard listSlashQuery(from: newText) != nil else { listPickerIndex = 0; return }
-        let f  = listSlashQuery(from: newText)?.filter ?? ""
-        let n  = lists.filter { f.isEmpty || $0.title.lowercased().contains(f) }.count
+        guard let slash = slashResult else { listPickerIndex = 0; return }
+        let f = slash.filter
+        let n = lists.filter { f.isEmpty || $0.title.lowercased().contains(f) }.count
         if listPickerIndex >= n { listPickerIndex = max(0, n - 1) }
     }
 
@@ -693,6 +815,9 @@ struct QuickAddView: View {
         guard slashQuery == nil else { return }
         guard !taskText.isEmpty else { return }
 
+        // Stop dictation on save
+        if dictation.isListening { dictation.stopListening() }
+
         var cleanTitle = taskText
         if let s = parsedPriorityString   { cleanTitle = cleanTitle.replacingOccurrences(of: s, with: "") }
         if let s = parsedDateString       { cleanTitle = cleanTitle.replacingOccurrences(of: s, with: "", options: .caseInsensitive) }
@@ -724,10 +849,10 @@ struct QuickAddView: View {
         let savedID        = reminder.calendarItemIdentifier
         let finalTitle     = cleanTitle
         let finalListTitle = dest?.title ?? "Reminders"
+        // BUG FIX: use cached DateFormatter instead of creating one per save
         var finalDateFmt: String?
         if let d = parsedDate {
-            let fmt = DateFormatter(); fmt.dateStyle = .short; fmt.timeStyle = .short
-            finalDateFmt = fmt.string(from: d)
+            finalDateFmt = sharedDateFormatter.string(from: d)
         }
 
         // Brief success flash
@@ -757,7 +882,7 @@ struct QuickAddView: View {
                 "list":          finalListTitle,
                 "date":          finalDateFmt ?? "",
                 "keepPanelOpen": keepPanelOpen,
-                "reminderID":    savedID,           // ← new, used by ⌘Z undo
+                "reminderID":    savedID,           // ← used by ⌘Z undo
             ]
         )
     }
@@ -766,12 +891,16 @@ struct QuickAddView: View {
 
     private func toggleSearchModeFromHotkey() {
         if isSearchMode {
-            isSearchMode = false
+            withAnimation(.spring(response: 0.22, dampingFraction: 0.86)) {
+                isSearchMode = false
+            }
             taskText = composeDraft
             composeDraft = ""
         } else {
             composeDraft = taskText
-            isSearchMode = true
+            withAnimation(.spring(response: 0.22, dampingFraction: 0.86)) {
+                isSearchMode = true
+            }
             taskText = ""
             suggestion = ""
         }
@@ -795,44 +924,98 @@ struct QuickAddView: View {
         searchDebounceTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 220_000_000)
             guard !Task.isCancelled, isSearchMode else { return }
-            let hits = await fetchMatchingReminders(query: query)
-            guard !Task.isCancelled, isSearchMode else { return }
-            searchHitRows = hits.map {
-                SearchHitRowModel(id: $0.calendarItemIdentifier, title: $0.title, subtitle: reminderSubtitle(for: $0))
-            }
+            searchHitRows = filterSearchIndex(query: query, rows: searchIndexRows)
+            searchSelectedIndex = 0
             postMainPanelSearchLayout()
         }
     }
 
-    private func fetchMatchingReminders(query: String) async -> [EKReminder] {
+    private func refreshSearchIndex() {
+        guard isSearchMode else { return }
+        searchIndexTask?.cancel()
+        searchIndexTask = Task { @MainActor in
+            let rows = await fetchSearchIndexRows()
+            guard !Task.isCancelled, isSearchMode else { return }
+            searchIndexRows = rows
+            searchHitRows = filterSearchIndex(query: taskText, rows: rows)
+            postMainPanelSearchLayout()
+        }
+    }
+
+    private func fetchSearchIndexRows() async -> [SearchIndexRow] {
         await withCheckedContinuation { continuation in
-            let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
             let cals    = eventStore.calendars(for: .reminder)
-            guard !trimmed.isEmpty, !cals.isEmpty else {
+            guard !cals.isEmpty else {
                 continuation.resume(returning: []); return
             }
-            let now   = Date()
-            guard let start = Calendar.current.date(byAdding: .year, value: -2, to: now),
-                  let end   = Calendar.current.date(byAdding: .year, value: 2,  to: now) else {
-                continuation.resume(returning: []); return
-            }
-            let predicate = eventStore.predicateForIncompleteReminders(withDueDateStarting: start, ending: end, calendars: cals)
+            let predicate = eventStore.predicateForReminders(in: cals)
             eventStore.fetchReminders(matching: predicate) { reminders in
-                let parts   = trimmed.lowercased().split(separator: " ").map(String.init)
-                let matched = (reminders ?? []).filter { r in
-                    let hay = (r.title + " " + (r.notes ?? "")).lowercased()
-                    return parts.allSatisfy { hay.contains($0) }
-                }.prefix(35)
-                DispatchQueue.main.async { continuation.resume(returning: Array(matched)) }
+                let rows = (reminders ?? [])
+                    .filter { !$0.isCompleted }
+                    .sorted { lhs, rhs in
+                        // Sort before limiting so we keep the most relevant entries
+                        let ld = self.dueDate(for: lhs)
+                        let rd = self.dueDate(for: rhs)
+                        switch (ld, rd) {
+                        case let (l?, r?): return l < r
+                        case (_?, nil): return true
+                        case (nil, _?): return false
+                        // BUG FIX: guard against nil titles to prevent crash
+                        case (nil, nil): return (lhs.title ?? "").localizedCaseInsensitiveCompare(rhs.title ?? "") == .orderedAscending
+                        }
+                    }
+                    // PERF: limit to searchIndexMaxEntries to prevent unbounded memory
+                    .prefix(searchIndexMaxEntries)
+                    .map { reminder -> SearchIndexRow in
+                        let title = reminder.title ?? ""
+                        let subtitle = self.reminderSubtitle(for: reminder)
+                        let dueDate = self.dueDate(for: reminder)
+                        return SearchIndexRow(
+                            id: reminder.calendarItemIdentifier,
+                            title: title,
+                            subtitle: subtitle,
+                            searchText: self.normalizedSearchText([title, reminder.notes ?? "", subtitle].joined(separator: " ")),
+                            dueDate: dueDate
+                        )
+                    }
+                // BUG FIX: resume directly instead of wrapping in DispatchQueue.main.async
+                // The continuation is already on @MainActor; double-dispatch causes a frame drop.
+                continuation.resume(returning: Array(rows))
             }
         }
     }
 
+    private func filterSearchIndex(query: String, rows: [SearchIndexRow]) -> [SearchHitRowModel] {
+        let parts = normalizedSearchParts(query)
+        guard !parts.isEmpty else { return [] }
+        return Array(
+            rows.lazy
+                .filter { row in parts.allSatisfy { row.searchText.contains($0) } }
+                .prefix(35)
+                .map { SearchHitRowModel(id: $0.id, title: $0.title, subtitle: $0.subtitle) }
+        )
+    }
+
+    private func normalizedSearchParts(_ text: String) -> [String] {
+        normalizedSearchText(text)
+            .split(whereSeparator: { $0.isWhitespace || $0.isNewline })
+            .map(String.init)
+    }
+
+    private func normalizedSearchText(_ text: String) -> String {
+        text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+    }
+
+    private func dueDate(for reminder: EKReminder) -> Date? {
+        guard let due = reminder.dueDateComponents else { return nil }
+        return Calendar.current.date(from: due)
+    }
+
+    // BUG FIX: use cached DateFormatter instead of creating one per row
     private func reminderSubtitle(for reminder: EKReminder) -> String {
         let list = reminder.calendar?.title ?? ""
-        if let due = reminder.dueDateComponents, let date = Calendar.current.date(from: due) {
-            let fmt = DateFormatter(); fmt.dateStyle = .short; fmt.timeStyle = .short
-            return [list, fmt.string(from: date)].filter { !$0.isEmpty }.joined(separator: " · ")
+        if let date = dueDate(for: reminder) {
+            return [list, sharedDateFormatter.string(from: date)].filter { !$0.isEmpty }.joined(separator: " · ")
         }
         return list
     }
@@ -842,6 +1025,20 @@ struct QuickAddView: View {
             NSSound.beep(); return
         }
         NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Reminders.app"))
+    }
+
+    // MARK: - Search keyboard navigation
+
+    func moveSearchSelection(delta: Int) {
+        guard isSearchMode, !searchHitRows.isEmpty else { return }
+        let n = searchHitRows.count
+        searchSelectedIndex = ((searchSelectedIndex + delta) % n + n) % n
+    }
+
+    func activateSearchSelection() {
+        guard isSearchMode, !searchHitRows.isEmpty else { return }
+        let idx = min(max(0, searchSelectedIndex), searchHitRows.count - 1)
+        openReminderInRemindersApp(id: searchHitRows[idx].id)
     }
 
     private func requestPermissionsAndFetchLists() {

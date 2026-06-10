@@ -6,9 +6,10 @@ struct SearchHitRowModel: Identifiable, Hashable {
     let subtitle: String
 }
 
-/// Vertical reminder hits below the quick-add field (search / “finder” menu pattern).
+/// Vertical reminder hits below the quick-add field (search / "finder" menu pattern).
 struct SearchResultsMenuView: View {
     let hits: [SearchHitRowModel]
+    var selectedIndex: Int = 0
 
     var body: some View {
         Group {
@@ -20,23 +21,32 @@ struct SearchResultsMenuView: View {
                     .padding(.horizontal, 14)
                     .padding(.vertical, 14)
             } else {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 2) {
-                        ForEach(hits) { hit in
-                            row(hit)
-                                .id(hit.id)
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 2) {
+                            ForEach(Array(hits.enumerated()), id: \.element.id) { index, hit in
+                                row(hit, isSelected: index == selectedIndex)
+                                    .id(hit.id)
+                            }
+                        }
+                        .padding(.vertical, 6)
+                    }
+                    .frame(maxHeight: 240)
+                    .onChange(of: selectedIndex) { _, new in
+                        if new >= 0, new < hits.count {
+                            withAnimation(.easeOut(duration: 0.1)) {
+                                proxy.scrollTo(hits[new].id, anchor: .center)
+                            }
                         }
                     }
-                    .padding(.vertical, 6)
                 }
-                .frame(maxHeight: 240)
             }
         }
         .frame(minWidth: 220)
     }
 
     @ViewBuilder
-    private func row(_ hit: SearchHitRowModel) -> some View {
+    private func row(_ hit: SearchHitRowModel, isSelected: Bool) -> some View {
         Button {
             NotificationCenter.default.post(
                 name: .searchResultActivate,
@@ -45,12 +55,16 @@ struct SearchResultsMenuView: View {
             )
         } label: {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Image(systemName: "checkmark.circle")
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "checkmark.circle")
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(PanelChrome.searchAccent.opacity(0.75))
+                    .foregroundStyle(
+                        isSelected
+                            ? PanelChrome.searchAccent
+                            : PanelChrome.searchAccent.opacity(0.75)
+                    )
                 VStack(alignment: .leading, spacing: 2) {
                     Text(hit.title)
-                        .font(.system(size: 14, weight: .medium, design: .rounded))
+                        .font(.system(size: 14, weight: isSelected ? .semibold : .medium, design: .rounded))
                         .foregroundStyle(.primary)
                         .lineLimit(2)
                     if !hit.subtitle.isEmpty {
@@ -66,7 +80,7 @@ struct SearchResultsMenuView: View {
             .padding(.vertical, 8)
             .background(
                 RoundedRectangle(cornerRadius: PanelChrome.innerCorner, style: .continuous)
-                    .fill(Color.primary.opacity(0.04))
+                    .fill(isSelected ? PanelChrome.rowFillSelected : Color.primary.opacity(0.04))
             )
             .contentShape(Rectangle())
         }
