@@ -1,4 +1,5 @@
 import Foundation
+import EventKit
 
 struct NaturalDateParseResult: Equatable {
     var date: Date?
@@ -60,6 +61,15 @@ enum NaturalDateParser {
         pattern: #"(?i)(?<!next )\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b"#
     )
 
+    // Recurrence & Location Regexes
+    private static let recurrenceRegex = try! NSRegularExpression(
+        pattern: #"(?i)\bevery\s+(day|week|month|year|weekday|weekend|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b"#
+    )
+    
+    private static let locationRegex = try! NSRegularExpression(
+        pattern: #"(?i)\b(?:when i |upon |on )?(arrive|arriving|leave|leaving)(?:\s+at|\s+from)?\s+(home|work|school|here|office)\b"#
+    )
+
     // Relative-time patterns — pre-compiled
     private struct FuzzyPattern {
         let regex: NSRegularExpression
@@ -75,7 +85,7 @@ enum NaturalDateParser {
         ]
     }()
     private static let numericRelativeRegex = try! NSRegularExpression(
-        pattern: #"(?i)\bin\s+(\d+)\s*(hours?|hrs?|h\b|minutes?|mins?|m\b|days?|d\b|weeks?|w\b|months?|years?|y\b)\b"#
+        pattern: #"(?i)\bin\s+(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s*(hours?|hrs?|h\b|minutes?|mins?|m\b|days?|d\b|weeks?|w\b|months?|years?|y\b)\b"#
     )
 
     // ────────────────────────────────────────────────────────────
@@ -102,6 +112,80 @@ enum NaturalDateParser {
         }
 
         return best ?? NaturalDateParseResult(date: nil, matchedSubstring: nil, hasDateComponent: false, hasTimeComponent: false)
+    }
+
+    static func parseRecurrence(text: String) -> (rule: EKRecurrenceRule, matchedSubstring: String)? {
+        let ns = text as NSString
+        let full = NSRange(location: 0, length: ns.length)
+        guard let m = recurrenceRegex.firstMatch(in: text, options: [], range: full),
+              let r = Range(m.range, in: text) else { return nil }
+        
+        let matchStr = String(text[r])
+        let unitRaw = ns.substring(with: m.range(at: 1)).lowercased()
+        
+        var freq: EKRecurrenceFrequency = .daily
+        var daysOfTheWeek: [EKRecurrenceDayOfWeek]? = nil
+        
+        switch unitRaw {
+        case "day": freq = .daily
+        case "week": freq = .weekly
+        case "month": freq = .monthly
+        case "year": freq = .yearly
+        case "weekday":
+            freq = .weekly
+            daysOfTheWeek = [
+                EKRecurrenceDayOfWeek(.monday), EKRecurrenceDayOfWeek(.tuesday),
+                EKRecurrenceDayOfWeek(.wednesday), EKRecurrenceDayOfWeek(.thursday),
+                EKRecurrenceDayOfWeek(.friday)
+            ]
+        case "weekend":
+            freq = .weekly
+            daysOfTheWeek = [EKRecurrenceDayOfWeek(.saturday), EKRecurrenceDayOfWeek(.sunday)]
+        case "monday":
+            freq = .weekly; daysOfTheWeek = [EKRecurrenceDayOfWeek(.monday)]
+        case "tuesday":
+            freq = .weekly; daysOfTheWeek = [EKRecurrenceDayOfWeek(.tuesday)]
+        case "wednesday":
+            freq = .weekly; daysOfTheWeek = [EKRecurrenceDayOfWeek(.wednesday)]
+        case "thursday":
+            freq = .weekly; daysOfTheWeek = [EKRecurrenceDayOfWeek(.thursday)]
+        case "friday":
+            freq = .weekly; daysOfTheWeek = [EKRecurrenceDayOfWeek(.friday)]
+        case "saturday":
+            freq = .weekly; daysOfTheWeek = [EKRecurrenceDayOfWeek(.saturday)]
+        case "sunday":
+            freq = .weekly; daysOfTheWeek = [EKRecurrenceDayOfWeek(.sunday)]
+        default:
+            freq = .daily
+        }
+        
+        let rule = EKRecurrenceRule(
+            recurrenceWith: freq,
+            interval: 1,
+            daysOfTheWeek: daysOfTheWeek,
+            daysOfTheMonth: nil,
+            monthsOfTheYear: nil,
+            weeksOfTheYear: nil,
+            daysOfTheYear: nil,
+            setPositions: nil,
+            end: nil
+        )
+        
+        return (rule, matchStr)
+    }
+
+    static func parseLocation(text: String) -> (title: String, isArriving: Bool, matchedSubstring: String)? {
+        let ns = text as NSString
+        let full = NSRange(location: 0, length: ns.length)
+        guard let m = locationRegex.firstMatch(in: text, options: [], range: full),
+              let r = Range(m.range, in: text) else { return nil }
+        
+        let matchStr = String(text[r])
+        let actionRaw = ns.substring(with: m.range(at: 1)).lowercased()
+        let placeRaw = ns.substring(with: m.range(at: 2))
+        
+        let isArriving = actionRaw.contains("arrive") || actionRaw.contains("arriving")
+        return (placeRaw.capitalized, isArriving, matchStr)
     }
 
     // MARK: - Lexical phrases (tonight, eod, weekdays, …)
@@ -407,9 +491,29 @@ enum NaturalDateParser {
         guard let m = numericRelativeRegex.firstMatch(in: text, range: full),
               let r = Range(m.range, in: text) else { return nil }
 
-        guard m.numberOfRanges >= 3,
-              let n = Int(ns.substring(with: m.range(at: 1))),
-              n > 0 else { return nil }
+        guard m.numberOfRanges >= 3 else { return nil }
+        let numRaw = ns.substring(with: m.range(at: 1)).lowercased()
+        let n: Int
+        if let val = Int(numRaw) {
+            n = val
+        } else {
+            switch numRaw {
+            case "one": n = 1
+            case "two": n = 2
+            case "three": n = 3
+            case "four": n = 4
+            case "five": n = 5
+            case "six": n = 6
+            case "seven": n = 7
+            case "eight": n = 8
+            case "nine": n = 9
+            case "ten": n = 10
+            case "eleven": n = 11
+            case "twelve": n = 12
+            default: return nil
+            }
+        }
+        guard n > 0 else { return nil }
 
         let unitRaw = ns.substring(with: m.range(at: 2)).lowercased()
         let date: Date?

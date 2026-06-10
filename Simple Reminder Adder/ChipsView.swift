@@ -6,7 +6,7 @@ final class ChipsOverlayState: ObservableObject {
 }
 
 private enum ChipKind: String {
-    case priority, date, time, list
+    case priority, date, time, list, recurrence, location
 }
 
 struct ChipsView: View {
@@ -19,6 +19,8 @@ struct ChipsView: View {
     var highlightDate: Bool
     var highlightTime: Bool
     var listName: String?
+    var recurrenceText: String?
+    var locationTitle: String?
 
     @State private var sliderT: Double = 0.5
 
@@ -44,6 +46,12 @@ struct ChipsView: View {
                         glow: highlightTime
                     )
                 }
+            }
+            if let text = recurrenceText {
+                chip(kind: .recurrence, icon: "repeat", label: text.capitalized, glow: false)
+            }
+            if let text = locationTitle {
+                chip(kind: .location, icon: "location.fill", label: text, glow: false)
             }
             if let name = listName {
                 chip(kind: .list, icon: "list.bullet", label: name, glow: false)
@@ -172,8 +180,8 @@ struct ChipsView: View {
     private func chipColor(kind: ChipKind) -> Color {
         switch kind {
         case .priority: return priorityColor(for: displayPriority)
-        case .date, .time: return PanelChrome.dateTime
-        case .list: return PanelChrome.listAccent
+        case .date, .time, .recurrence: return PanelChrome.dateTime
+        case .list, .location: return PanelChrome.listAccent
         }
     }
 

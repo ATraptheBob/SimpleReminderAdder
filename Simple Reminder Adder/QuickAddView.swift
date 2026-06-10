@@ -39,6 +39,8 @@ private struct ChipSet: Equatable {
     var showDatePill: Bool
     var showTimePill: Bool
     var listName: String?
+    var recurrenceText: String?
+    var locationTitle: String?
 }
 private struct SearchIndexRow: Identifiable, Hashable {
     let id: String
@@ -79,9 +81,12 @@ struct QuickAddView: View {
     @State private var saveFlashActive = false
     @State private var parsedRecurrence: EKRecurrenceRule? = nil
     @State private var parsedRecurrenceString: String? = nil
+    @State private var parsedLocationTitle: String? = nil
+    @State private var parsedLocationString: String? = nil
+    @State private var parsedLocationIsArriving: Bool = true
 
     @State private var suggestion: String = ""
-    @State private var lastPostedChipSet = ChipSet(priority: 0, date: nil, showDatePill: false, showTimePill: false, listName: nil)
+    @State private var lastPostedChipSet = ChipSet(priority: 0, date: nil, showDatePill: false, showTimePill: false, listName: nil, recurrenceText: nil, locationTitle: nil)
 
     @State private var showDatePill: Bool = false
     @State private var showTimePill: Bool = false
@@ -669,7 +674,7 @@ struct QuickAddView: View {
 
     private func postIfChipsChanged() {
         if isSearchMode {
-            let cleared = ChipSet(priority: 0, date: nil, showDatePill: false, showTimePill: false, listName: nil)
+            let cleared = ChipSet(priority: 0, date: nil, showDatePill: false, showTimePill: false, listName: nil, recurrenceText: nil, locationTitle: nil)
             guard cleared != lastPostedChipSet else { return }
             lastPostedChipSet = cleared
             postChipState()
@@ -682,7 +687,9 @@ struct QuickAddView: View {
             date: parsedDate,
             showDatePill: showDatePill,
             showTimePill: showTimePill,
-            listName: parsedList?.title
+            listName: parsedList?.title,
+            recurrenceText: parsedRecurrenceString,
+            locationTitle: parsedLocationTitle
         )
         guard current != lastPostedChipSet else { return }
         lastPostedChipSet = current
@@ -690,7 +697,7 @@ struct QuickAddView: View {
     }
 
     private func forcePostChipState() {
-        lastPostedChipSet = ChipSet(priority: -1, date: nil, showDatePill: false, showTimePill: false, listName: nil)
+        lastPostedChipSet = ChipSet(priority: -1, date: nil, showDatePill: false, showTimePill: false, listName: nil, recurrenceText: nil, locationTitle: nil)
         postIfChipsChanged()
     }
 
@@ -706,6 +713,8 @@ struct QuickAddView: View {
                 "showTimePill": showTimePill,
                 "glowDate":     showDatePill && parsedDate != nil,
                 "glowTime":     showTimePill && parsedDate != nil,
+                "recurrenceText": parsedRecurrenceString,
+                "locationTitle": parsedLocationTitle
             ]
         )
     }
@@ -738,7 +747,10 @@ struct QuickAddView: View {
             attr[r].foregroundColor = PanelChrome.listAccent.opacity(0.45)
         }
         if let s = parsedRecurrenceString, let r = attr.range(of: s, options: .caseInsensitive) {
-            attr[r].foregroundColor = PanelChrome.priorityLow.opacity(0.45)
+            attr[r].foregroundColor = PanelChrome.dateTime.opacity(0.45)
+        }
+        if let s = parsedLocationString, let r = attr.range(of: s, options: .caseInsensitive) {
+            attr[r].foregroundColor = PanelChrome.listAccent.opacity(0.45)
         }
         return attr
     }
@@ -748,6 +760,7 @@ struct QuickAddView: View {
     private func parseText() {
         if isSearchMode {
             parsedRecurrence = nil; parsedRecurrenceString = nil
+            parsedLocationTitle = nil; parsedLocationString = nil
             parsedDate = nil; parsedDateString = nil
             parsedList = nil; parsedListString = nil
             parsedPriority = 0; parsedPriorityString = nil
@@ -755,6 +768,7 @@ struct QuickAddView: View {
             return
         }
         parsedRecurrence = nil; parsedRecurrenceString = nil
+        parsedLocationTitle = nil; parsedLocationString = nil
         parsedDate = nil; parsedDateString = nil
         parsedList = nil; parsedListString = nil
         parsedPriority = 0; parsedPriorityString = nil
@@ -784,9 +798,16 @@ struct QuickAddView: View {
             if !showDatePill && !showTimePill { showTimePill = true }
         }
         
-        let rec = parseRecurrence(from: taskText)
-        parsedRecurrence       = rec.rule
-        parsedRecurrenceString = rec.matchedString
+        if let rec = NaturalDateParser.parseRecurrence(text: taskText) {
+            parsedRecurrence       = rec.rule
+            parsedRecurrenceString = rec.matchedSubstring
+        }
+        
+        if let loc = NaturalDateParser.parseLocation(text: taskText) {
+            parsedLocationTitle = loc.title
+            parsedLocationIsArriving = loc.isArriving
+            parsedLocationString = loc.matchedSubstring
+        }
     }
 
     private func applyPriorityPrefixToTaskText() {
@@ -819,6 +840,18 @@ struct QuickAddView: View {
             }
         case "list":
             if let s = parsedListString {
+                taskText = taskText
+                    .replacingOccurrences(of: s, with: "", options: .caseInsensitive)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        case "recurrence":
+            if let s = parsedRecurrenceString {
+                taskText = taskText
+                    .replacingOccurrences(of: s, with: "", options: .caseInsensitive)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        case "location":
+            if let s = parsedLocationString {
                 taskText = taskText
                     .replacingOccurrences(of: s, with: "", options: .caseInsensitive)
                     .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -876,6 +909,7 @@ struct QuickAddView: View {
         if let s = parsedDateString       { cleanTitle = cleanTitle.replacingOccurrences(of: s, with: "", options: .caseInsensitive) }
         if let s = parsedListString       { cleanTitle = cleanTitle.replacingOccurrences(of: s, with: "", options: .caseInsensitive) }
         if let s = parsedRecurrenceString { cleanTitle = cleanTitle.replacingOccurrences(of: s, with: "", options: .caseInsensitive) }
+        if let s = parsedLocationString   { cleanTitle = cleanTitle.replacingOccurrences(of: s, with: "", options: .caseInsensitive) }
         cleanTitle = cleanTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         if cleanTitle.isEmpty { cleanTitle = "New Task" }
 
@@ -890,6 +924,13 @@ struct QuickAddView: View {
         }
         if let rule = parsedRecurrence {
             reminder.recurrenceRules = [rule]
+        }
+        if let locationTitle = parsedLocationTitle {
+            let alarm = EKAlarm()
+            let loc = EKStructuredLocation(title: locationTitle)
+            alarm.structuredLocation = loc
+            alarm.proximity = parsedLocationIsArriving ? .enter : .leave
+            reminder.addAlarm(alarm)
         }
         do {
             try eventStore.save(reminder, commit: true)
@@ -923,8 +964,9 @@ struct QuickAddView: View {
         }
         suggestion = ""
         parsedRecurrence = nil; parsedRecurrenceString = nil
+        parsedLocationTitle = nil; parsedLocationString = nil
         parseText()
-        lastPostedChipSet = ChipSet(priority: 0, date: nil, showDatePill: false, showTimePill: false, listName: nil)
+        lastPostedChipSet = ChipSet(priority: 0, date: nil, showDatePill: false, showTimePill: false, listName: nil, recurrenceText: nil, locationTitle: nil)
         postChipState()
 
         NotificationCenter.default.post(

@@ -40,8 +40,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         showDatePill: Bool,
         showTimePill: Bool,
         glowDate: Bool,
-        glowTime: Bool
-    ) = (0, nil, nil, false, false, false, false)
+        glowTime: Bool,
+        recurrenceText: String?,
+        locationTitle: String?
+    ) = (0, nil, nil, false, false, false, false, nil, nil)
 
     private let chipsOverlayState = ChipsOverlayState()
 
@@ -92,7 +94,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 info["showDatePill"] as? Bool  ?? false,
                 info["showTimePill"] as? Bool  ?? false,
                 info["glowDate"]     as? Bool  ?? false,
-                info["glowTime"]     as? Bool  ?? false
+                info["glowTime"]     as? Bool  ?? false,
+                info["recurrenceText"] as? String,
+                info["locationTitle"]  as? String
             )
             self.syncChipsPanel()
         }
@@ -404,7 +408,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         chipsPanel?.alphaValue = 1
         if let m = globalClickMonitor { NSEvent.removeMonitor(m); globalClickMonitor = nil }
         if let m = localKeyMonitor    { NSEvent.removeMonitor(m); localKeyMonitor    = nil }
-        chipsState = (0, nil, nil, false, false, false, false)
+        chipsState = (0, nil, nil, false, false, false, false, nil, nil)
     }
 
     private func resizeMainPanelForListPicker(open: Bool) {
@@ -477,7 +481,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         chipsSyncGeneration += 1
         let gen = chipsSyncGeneration
 
-        let hasChips = chipsState.priority > 0 || chipsState.date != nil || chipsState.listName != nil
+        let hasChips = chipsState.priority > 0 || chipsState.date != nil || chipsState.listName != nil || chipsState.recurrenceText != nil || chipsState.locationTitle != nil
 
         guard hasChips else {
             if let cp = chipsPanel, cp.isVisible {
@@ -516,7 +520,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 showTimePill: chipsState.showTimePill,
                 highlightDate: chipsState.glowDate,
                 highlightTime: chipsState.glowTime,
-                listName:     chipsState.listName
+                listName:     chipsState.listName,
+                recurrenceText: chipsState.recurrenceText,
+                locationTitle: chipsState.locationTitle
             )
             .environmentObject(chipsOverlayState)
         )
