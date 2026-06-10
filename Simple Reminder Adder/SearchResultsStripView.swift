@@ -143,6 +143,8 @@ struct SearchResultsMenuView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .accessibilityLabel(isCompleted ? "Completed" : "Mark as complete")
+            .help(isCompleted ? "Completed" : "Mark as complete")
 
             Button {
                 NotificationCenter.default.post(
