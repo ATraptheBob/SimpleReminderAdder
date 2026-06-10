@@ -142,6 +142,10 @@ enum NaturalDateParser {
         pattern: #"(?i)\b(?:when i |upon |on )?(arrive|arriving|leave|leaving)(?:\s+at|\s+from)?\s+(home|work|school|here|office)\b"#
     )
 
+    // ⚡ Bolt: Cache NSDataDetector since its initialization is very expensive
+    // and this parser is called repeatedly on every keystroke.
+    private static let sharedDateDetector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.date.rawValue)
+
     // Relative-time patterns — pre-compiled
     private struct FuzzyPattern {
         let regex: NSRegularExpression
@@ -490,7 +494,7 @@ enum NaturalDateParser {
     }
 
     private static func parseDetector(text: String) -> NaturalDateParseResult? {
-        guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.date.rawValue) else { return nil }
+        guard let detector = sharedDateDetector else { return nil }
         let ns = text as NSString
         let matches = detector.matches(in: text, options: [], range: NSRange(location: 0, length: ns.length))
         guard let match = matches.first, let date = match.date, let baseRange = Range(match.range, in: text) else { return nil }
