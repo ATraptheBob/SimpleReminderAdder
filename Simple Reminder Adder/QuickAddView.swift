@@ -416,6 +416,8 @@ struct QuickAddView: View {
                     if !isSearchMode { saveTask(keepPanelOpen: false) }
                 }
                 .padding(.horizontal, 22)
+                .accessibilityLabel("New reminder")
+                .accessibilityHint("Type your reminder and press Return to save")
 
             // Save-success flash overlay
             if saveFlashActive {
@@ -476,6 +478,7 @@ struct QuickAddView: View {
                     }
                     .buttonStyle(.plain)
                     .help("Voice dictation (⌘D)")
+                    .accessibilityLabel(dictation.isListening ? "Stop dictation" : "Start dictation")
                 }
 
                 if dripSessionCount > 0 {
