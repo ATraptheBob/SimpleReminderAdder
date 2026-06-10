@@ -342,6 +342,16 @@ struct QuickAddView: View {
     // MARK: - Handlers
 
     private func handleTaskTextChange(_ new: String) {
+        // SECURITY ENHANCEMENT: Enforce maximum input length to prevent CPU exhaustion/ReDoS
+        let maxLength = 500
+        if new.count > maxLength {
+            let truncated = String(new.prefix(maxLength))
+            DispatchQueue.main.async {
+                self.taskText = truncated
+            }
+            return // Exit early to avoid parsing the oversized text. The update will trigger a new change event.
+        }
+
         // BUG FIX: call listSlashQuery once and reuse the result
         let currentSlash = listSlashQuery(from: new)
         let open = !isSearchMode && (currentSlash != nil)
