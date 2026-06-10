@@ -27,6 +27,9 @@ extension Notification.Name {
     static let panelDidClose               = Notification.Name("PanelDidClose")
     static let searchResultComplete        = Notification.Name("SearchResultComplete")
     static let searchCompleteSelected      = Notification.Name("SearchCompleteSelected")
+    static let searchDeleteSelected        = Notification.Name("SearchDeleteSelected")
+    static let searchResultDelete          = Notification.Name("SearchResultDelete")
+    static let upArrowRecall               = Notification.Name("UpArrowRecall")
 }
 
 // MARK: - ChipSet
@@ -48,6 +51,7 @@ private struct SearchIndexRow: Identifiable, Hashable {
     let subtitle: String
     let searchText: String
     let dueDate: Date?
+    let isCompleted: Bool
 }
 
 private let inputBarHeight: CGFloat = 58
@@ -101,6 +105,12 @@ struct QuickAddView: View {
     @State private var searchIndexRows: [SearchIndexRow] = []
     @State private var searchIndexTask: Task<Void, Never>?
     @State private var searchSelectedIndex: Int = 0
+
+    // Draft recovery
+    @State private var showDraftRestoredBadge: Bool = false
+    @AppStorage("draftInput") private var savedDraft: String = ""
+    @AppStorage("lastAddedText") private var lastAddedText: String = ""
+    @AppStorage("keepPanelOpen") private var keepPanelOpenSetting: Bool = false
 
     // Voice dictation
     @StateObject private var dictation = VoiceDictationManager()
@@ -164,6 +174,9 @@ struct QuickAddView: View {
                     .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("PanelDidOpen"))) { _ in
                         handlePanelDidOpen()
                     }
+                    .onReceive(NotificationCenter.default.publisher(for: .upArrowRecall)) { _ in
+                        handleUpArrowRecall()
+                    }
                     .onReceive(NotificationCenter.default.publisher(for: .quickAddTabAcceptSuggestion)) { _ in
                         if slashQuery != nil { moveListSelection(delta: 1) }
                         else { acceptSuggestion() }
@@ -222,10 +235,18 @@ struct QuickAddView: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: .panelDidClose)) { _ in
                 if dictation.isListening { dictation.stopListening() }
+                // Save draft on panel close
+                if !taskText.isEmpty {
+                    savedDraft = taskText
+                }
             }
             .onReceive(NotificationCenter.default.publisher(for: .searchResultComplete)) { note in
                 guard let id = note.userInfo?["id"] as? String else { return }
                 self.completeReminder(id: id)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .searchResultDelete)) { note in
+                guard let id = note.userInfo?["id"] as? String else { return }
+                self.deleteReminder(id: id)
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .chipPrioritySliderCommit)) { note in
@@ -364,6 +385,19 @@ struct QuickAddView: View {
         searchIndexTask?.cancel()
         notifySearchModePresence(active: false)
         postMainPanelSearchLayout()
+
+        // Draft recovery: restore saved draft if present
+        if taskText.isEmpty && !savedDraft.isEmpty {
+            taskText = savedDraft
+            savedDraft = ""
+            showDraftRestoredBadge = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                withAnimation(.easeOut(duration: 0.3)) {
+                    showDraftRestoredBadge = false
+                }
+            }
+        }
+
         listPickerLayoutOpenState = listSlashQuery(from: taskText) != nil
         if listPickerLayoutOpenState {
             NotificationCenter.default.post(
@@ -379,6 +413,16 @@ struct QuickAddView: View {
             isInputFocused = true
             forcePostChipState()
         }
+    }
+
+    // MARK: - Up-arrow recall
+
+    private func handleUpArrowRecall() {
+        guard !isSearchMode, taskText.isEmpty, !lastAddedText.isEmpty else { return }
+        taskText = lastAddedText
+        parseText()
+        updateSuggestion()
+        postIfChipsChanged()
     }
 
     private var clampedListIndex: Int {
@@ -438,7 +482,7 @@ struct QuickAddView: View {
                 .lineLimit(1)
                 .focused($isInputFocused)
                 .onSubmit {
-                    if !isSearchMode { saveTask(keepPanelOpen: false) }
+                    if !isSearchMode { saveTask(keepPanelOpen: keepPanelOpenSetting) }
                 }
                 .padding(.horizontal, 22)
                 .accessibilityLabel("New reminder")
@@ -489,6 +533,27 @@ struct QuickAddView: View {
         .clipped()
         .transaction { transaction in
             transaction.animation = nil
+        }
+        .overlay(alignment: .bottomLeading) {
+            // Draft restored indicator
+            if showDraftRestoredBadge {
+                HStack(spacing: 4) {
+                    Image(systemName: "arrow.uturn.backward.circle.fill")
+                        .font(.system(size: 9))
+                    Text("Draft restored")
+                        .font(.system(size: 9, weight: .medium, design: .rounded))
+                }
+                .foregroundStyle(.secondary.opacity(0.7))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(
+                    Capsule().fill(Color.primary.opacity(0.05))
+                )
+                .padding(.leading, 22)
+                .padding(.bottom, 4)
+                .transition(.opacity.combined(with: .scale(scale: 0.8, anchor: .bottomLeading)))
+                .allowsHitTesting(false)
+            }
         }
         .overlay(alignment: .trailing) {
             HStack(spacing: 6) {
@@ -955,6 +1020,11 @@ struct QuickAddView: View {
             withAnimation(.easeOut(duration: 0.2)) { saveFlashActive = false }
         }
 
+        // Store for up-arrow recall
+        lastAddedText = taskText
+        // Clear saved draft since we've successfully submitted
+        savedDraft = ""
+
         if keepPanelOpen {
             dripSessionCount += 1
             withAnimation(.spring(response: 0.15, dampingFraction: 0.8)) { taskText = "" }
@@ -1070,7 +1140,8 @@ struct QuickAddView: View {
                             title: title,
                             subtitle: subtitle,
                             searchText: self.normalizedSearchText([title, reminder.notes ?? "", subtitle].joined(separator: " ")),
-                            dueDate: dueDate
+                            dueDate: dueDate,
+                            isCompleted: reminder.isCompleted
                         )
                     }
                 // BUG FIX: resume directly instead of wrapping in DispatchQueue.main.async
@@ -1087,7 +1158,7 @@ struct QuickAddView: View {
             rows.lazy
                 .filter { row in parts.allSatisfy { row.searchText.contains($0) } }
                 .prefix(35)
-                .map { SearchHitRowModel(id: $0.id, title: $0.title, subtitle: $0.subtitle) }
+                .map { SearchHitRowModel(id: $0.id, title: $0.title, subtitle: $0.subtitle, isCompleted: $0.isCompleted, dueDate: $0.dueDate) }
         )
     }
 
@@ -1223,6 +1294,17 @@ struct QuickAddView: View {
         do {
             reminder.isCompleted = true
             try eventStore.save(reminder, commit: true)
+            ReminderHaptics.successSnap()
+            refreshSearchIndex()
+        } catch {
+            NSSound.beep()
+        }
+    }
+
+    private func deleteReminder(id: String) {
+        guard let reminder = eventStore.calendarItem(withIdentifier: id) as? EKReminder else { return }
+        do {
+            try eventStore.remove(reminder, commit: true)
             ReminderHaptics.successSnap()
             refreshSearchIndex()
         } catch {

@@ -282,8 +282,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 return nil
             }
 
-            // ⌘D — toggle voice dictation
-            if flags.contains(.command), event.keyCode == 2 {
+            // ⌘+<dictation hotkey> — toggle voice dictation (configurable)
+            let dictKey = UserDefaults.standard.string(forKey: "dictationHotkey") ?? "d"
+            if flags.contains(.command),
+               let chars = event.charactersIgnoringModifiers?.lowercased(),
+               chars == dictKey {
                 NotificationCenter.default.post(name: .toggleDictation, object: nil)
                 return nil
             }
@@ -304,6 +307,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 return event
             }
 
+            // Spacebar in search mode — mark selected as complete
+            if searchModeIsOpen, event.keyCode == 49 {
+                NotificationCenter.default.post(name: .searchCompleteSelected, object: nil)
+                return nil
+            }
+
+            // Delete / ⌘⌫ in search mode — delete selected reminder
+            if searchModeIsOpen, event.keyCode == 51 {
+                NotificationCenter.default.post(name: .searchDeleteSelected, object: nil)
+                return nil
+            }
+
             // Arrow keys in list picker or search mode
             if listPickerIsOpen {
                 if event.keyCode == 125 { NotificationCenter.default.post(name: .listPickerNavigate, object: nil, userInfo: ["delta":  1]); return nil }
@@ -312,6 +327,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             if searchModeIsOpen {
                 if event.keyCode == 125 { NotificationCenter.default.post(name: .searchNavigate, object: nil, userInfo: ["delta":  1]); return nil }
                 if event.keyCode == 126 { NotificationCenter.default.post(name: .searchNavigate, object: nil, userInfo: ["delta": -1]); return nil }
+            }
+
+            // Up arrow recall (when not in list picker or search) — recall last reminder
+            if event.keyCode == 126, !listPickerIsOpen, !searchModeIsOpen {
+                NotificationCenter.default.post(name: .upArrowRecall, object: nil)
+                return nil
             }
 
             // Tab

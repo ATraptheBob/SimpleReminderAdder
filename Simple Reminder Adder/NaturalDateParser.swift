@@ -11,6 +11,37 @@ struct NaturalDateParseResult: Equatable {
 enum NaturalDateParser {
 
     // ────────────────────────────────────────────────────────────
+    // MARK: - Configurable time-of-day defaults
+    // ────────────────────────────────────────────────────────────
+    //
+    // Reads user preferences from UserDefaults (set via SettingsView).
+    // Falls back to the original hardcoded defaults if no custom value is stored.
+
+    static func timeForDayPart(_ name: String) -> (hour: Int, minute: Int) {
+        let defaults = UserDefaults.standard
+        switch name.lowercased() {
+        case "morning":
+            let h = defaults.object(forKey: "timeMorningHour")   as? Int ?? 9
+            let m = defaults.object(forKey: "timeMorningMinute") as? Int ?? 0
+            return (h, m)
+        case "afternoon":
+            let h = defaults.object(forKey: "timeAfternoonHour")   as? Int ?? 14
+            let m = defaults.object(forKey: "timeAfternoonMinute") as? Int ?? 0
+            return (h, m)
+        case "evening":
+            let h = defaults.object(forKey: "timeEveningHour")   as? Int ?? 19
+            let m = defaults.object(forKey: "timeEveningMinute") as? Int ?? 0
+            return (h, m)
+        case "night":
+            let h = defaults.object(forKey: "timeNightHour")   as? Int ?? 21
+            let m = defaults.object(forKey: "timeNightMinute") as? Int ?? 0
+            return (h, m)
+        default:
+            return (9, 0)
+        }
+    }
+
+    // ────────────────────────────────────────────────────────────
     // MARK: - Pre-compiled regexes (created once, reused on every keystroke)
     // ────────────────────────────────────────────────────────────
 
@@ -19,24 +50,56 @@ enum NaturalDateParser {
         let builder: (Date, Calendar) -> NaturalDateParseResult
     }
 
+    // NOTE: Patterns that reference morning/afternoon/evening/night now call
+    // timeForDayPart() at parse-time so they pick up user-customized values.
     private static let lexicalPatterns: [LexicalPattern] = {
         func re(_ p: String) -> NSRegularExpression { try! NSRegularExpression(pattern: p) }
 
         return [
-            LexicalPattern(regex: re(#"(?i)\bday after tomorrow\b"#))       { now, cal in dayAfterTomorrowAt(hour: 9, minute: 0, reference: now, cal: cal) },
-            LexicalPattern(regex: re(#"(?i)\btomorrow morning\b"#))         { now, cal in tomorrowAt(hour: 9, minute: 0, reference: now, cal: cal) },
-            LexicalPattern(regex: re(#"(?i)\btomorrow afternoon\b"#))       { now, cal in tomorrowAt(hour: 14, minute: 0, reference: now, cal: cal) },
-            LexicalPattern(regex: re(#"(?i)\btomorrow evening\b"#))         { now, cal in tomorrowAt(hour: 19, minute: 0, reference: now, cal: cal) },
-            LexicalPattern(regex: re(#"(?i)\btomorrow\b"#))                 { now, cal in tomorrowAt(hour: 9, minute: 0, reference: now, cal: cal) },
+            LexicalPattern(regex: re(#"(?i)\bday after tomorrow\b"#))       { now, cal in
+                let m = timeForDayPart("morning")
+                return dayAfterTomorrowAt(hour: m.hour, minute: m.minute, reference: now, cal: cal)
+            },
+            LexicalPattern(regex: re(#"(?i)\btomorrow morning\b"#))         { now, cal in
+                let m = timeForDayPart("morning")
+                return tomorrowAt(hour: m.hour, minute: m.minute, reference: now, cal: cal)
+            },
+            LexicalPattern(regex: re(#"(?i)\btomorrow afternoon\b"#))       { now, cal in
+                let a = timeForDayPart("afternoon")
+                return tomorrowAt(hour: a.hour, minute: a.minute, reference: now, cal: cal)
+            },
+            LexicalPattern(regex: re(#"(?i)\btomorrow evening\b"#))         { now, cal in
+                let e = timeForDayPart("evening")
+                return tomorrowAt(hour: e.hour, minute: e.minute, reference: now, cal: cal)
+            },
+            LexicalPattern(regex: re(#"(?i)\btomorrow\b"#))                 { now, cal in
+                let m = timeForDayPart("morning")
+                return tomorrowAt(hour: m.hour, minute: m.minute, reference: now, cal: cal)
+            },
             LexicalPattern(regex: re(#"(?i)\bthis evening\b"#))             { now, cal in thisEveningResult(reference: now, cal: cal) },
             LexicalPattern(regex: re(#"(?i)\btonight\b"#))                  { now, cal in tonightResult(reference: now, cal: cal) },
-            LexicalPattern(regex: re(#"(?i)\bthis afternoon\b"#))           { now, cal in dayPartResult(reference: now, cal: cal, hour: 14, minute: 0) },
-            LexicalPattern(regex: re(#"(?i)\bthis morning\b"#))             { now, cal in dayPartResult(reference: now, cal: cal, hour: 9, minute: 0) },
+            LexicalPattern(regex: re(#"(?i)\bthis afternoon\b"#))           { now, cal in
+                let a = timeForDayPart("afternoon")
+                return dayPartResult(reference: now, cal: cal, hour: a.hour, minute: a.minute)
+            },
+            LexicalPattern(regex: re(#"(?i)\bthis morning\b"#))             { now, cal in
+                let m = timeForDayPart("morning")
+                return dayPartResult(reference: now, cal: cal, hour: m.hour, minute: m.minute)
+            },
             LexicalPattern(regex: re(#"(?i)\bthis weekend\b"#))             { now, cal in weekendResult(offsetWeeks: 0, reference: now, cal: cal) },
             LexicalPattern(regex: re(#"(?i)\bnext weekend\b"#))             { now, cal in weekendResult(offsetWeeks: 1, reference: now, cal: cal) },
-            LexicalPattern(regex: re(#"(?i)\bnext week\b"#))                { now, cal in offsetDays(7, atHour: 9, minute: 0, reference: now, cal: cal) },
-            LexicalPattern(regex: re(#"(?i)\bnext month\b"#))               { now, cal in offsetMonths(1, atHour: 9, minute: 0, reference: now, cal: cal) },
-            LexicalPattern(regex: re(#"(?i)\bnext year\b"#))                { now, cal in offsetYears(1, atHour: 9, minute: 0, reference: now, cal: cal) },
+            LexicalPattern(regex: re(#"(?i)\bnext week\b"#))                { now, cal in
+                let m = timeForDayPart("morning")
+                return offsetDays(7, atHour: m.hour, minute: m.minute, reference: now, cal: cal)
+            },
+            LexicalPattern(regex: re(#"(?i)\bnext month\b"#))               { now, cal in
+                let m = timeForDayPart("morning")
+                return offsetMonths(1, atHour: m.hour, minute: m.minute, reference: now, cal: cal)
+            },
+            LexicalPattern(regex: re(#"(?i)\bnext year\b"#))                { now, cal in
+                let m = timeForDayPart("morning")
+                return offsetYears(1, atHour: m.hour, minute: m.minute, reference: now, cal: cal)
+            },
             LexicalPattern(regex: re(#"(?i)\bend of day\b"#))               { now, cal in todayAt(hour: 17, minute: 0, reference: now, cal: cal, rollForwardIfPast: true) },
             LexicalPattern(regex: re(#"(?i)\beod\b"#))                      { now, cal in todayAt(hour: 17, minute: 0, reference: now, cal: cal, rollForwardIfPast: true) },
             LexicalPattern(regex: re(#"(?i)\bclose of business\b"#))        { now, cal in fridaySameWeekAt(hour: 17, minute: 0, reference: now, cal: cal) },
@@ -48,9 +111,18 @@ enum NaturalDateParser {
             LexicalPattern(regex: re(#"(?i)\bmidnight\b"#))                 { now, cal in endOfToday(reference: now, cal: cal) },
             LexicalPattern(regex: re(#"(?i)\blater today\b"#))              { now, cal in offsetHours(4, reference: now, cal: cal) },
             LexicalPattern(regex: re(#"(?i)\blater\b"#))                    { now, cal in offsetHours(4, reference: now, cal: cal) },
-            LexicalPattern(regex: re(#"(?i)\bin a week\b"#))                { now, cal in offsetDays(7, atHour: 9, minute: 0, reference: now, cal: cal) },
-            LexicalPattern(regex: re(#"(?i)\bin a month\b"#))               { now, cal in offsetMonths(1, atHour: 9, minute: 0, reference: now, cal: cal) },
-            LexicalPattern(regex: re(#"(?i)\bin a year\b"#))                { now, cal in offsetYears(1, atHour: 9, minute: 0, reference: now, cal: cal) },
+            LexicalPattern(regex: re(#"(?i)\bin a week\b"#))                { now, cal in
+                let m = timeForDayPart("morning")
+                return offsetDays(7, atHour: m.hour, minute: m.minute, reference: now, cal: cal)
+            },
+            LexicalPattern(regex: re(#"(?i)\bin a month\b"#))               { now, cal in
+                let m = timeForDayPart("morning")
+                return offsetMonths(1, atHour: m.hour, minute: m.minute, reference: now, cal: cal)
+            },
+            LexicalPattern(regex: re(#"(?i)\bin a year\b"#))                { now, cal in
+                let m = timeForDayPart("morning")
+                return offsetYears(1, atHour: m.hour, minute: m.minute, reference: now, cal: cal)
+            },
         ]
     }()
 
@@ -267,11 +339,13 @@ enum NaturalDateParser {
     }
 
     private static func tonightResult(reference now: Date, cal: Calendar) -> NaturalDateParseResult {
-        thisEveningResult(reference: now, cal: cal)
+        let n = timeForDayPart("night")
+        return dayPartResult(reference: now, cal: cal, hour: n.hour, minute: n.minute)
     }
 
     private static func thisEveningResult(reference now: Date, cal: Calendar) -> NaturalDateParseResult {
-        dayPartResult(reference: now, cal: cal, hour: 19, minute: 0)
+        let e = timeForDayPart("evening")
+        return dayPartResult(reference: now, cal: cal, hour: e.hour, minute: e.minute)
     }
 
     private static func dayPartResult(reference now: Date, cal: Calendar, hour: Int, minute: Int) -> NaturalDateParseResult {
