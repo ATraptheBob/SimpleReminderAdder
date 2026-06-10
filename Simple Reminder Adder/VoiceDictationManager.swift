@@ -19,10 +19,6 @@ final class VoiceDictationManager: ObservableObject {
     private var recognitionTask: SFSpeechRecognitionTask?
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
 
-    /// Auto-stop after this much silence.
-    private let silenceTimeout: TimeInterval = 3.0
-    private var silenceTimer: DispatchWorkItem?
-
     // MARK: - Public API
 
     func toggle() {
@@ -54,8 +50,6 @@ final class VoiceDictationManager: ObservableObject {
 
     func stopListening() {
         guard isListening else { return }
-        silenceTimer?.cancel()
-        silenceTimer = nil
         audioEngine.stop()
         audioEngine.inputNode.removeTap(onBus: 0)
         recognitionRequest?.endAudio()
@@ -69,6 +63,19 @@ final class VoiceDictationManager: ObservableObject {
         if !final.isEmpty {
             onCommit.send(final)
         }
+    }
+
+    func restartListening() {
+        guard isListening else { return }
+        audioEngine.stop()
+        audioEngine.inputNode.removeTap(onBus: 0)
+        recognitionRequest?.endAudio()
+        recognitionTask?.cancel()
+        
+        recognitionTask = nil
+        recognitionRequest = nil
+        
+        beginSession()
     }
 
     // MARK: - Session
@@ -102,7 +109,6 @@ final class VoiceDictationManager: ObservableObject {
         }
 
         isListening = true
-        resetSilenceTimer()
 
         recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
             guard let self else { return }
@@ -110,10 +116,6 @@ final class VoiceDictationManager: ObservableObject {
             if let result {
                 DispatchQueue.main.async {
                     self.transcript = result.bestTranscription.formattedString
-                    self.resetSilenceTimer()
-                }
-                if result.isFinal {
-                    DispatchQueue.main.async { self.stopListening() }
                 }
             }
 
@@ -121,15 +123,6 @@ final class VoiceDictationManager: ObservableObject {
                 DispatchQueue.main.async { self.stopListening() }
             }
         }
-    }
-
-    private func resetSilenceTimer() {
-        silenceTimer?.cancel()
-        let work = DispatchWorkItem { [weak self] in
-            DispatchQueue.main.async { self?.stopListening() }
-        }
-        silenceTimer = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + silenceTimeout, execute: work)
     }
 
     private func cleanUp() {

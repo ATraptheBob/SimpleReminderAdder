@@ -815,8 +815,14 @@ struct QuickAddView: View {
         guard slashQuery == nil else { return }
         guard !taskText.isEmpty else { return }
 
-        // Stop dictation on save
-        if dictation.isListening { dictation.stopListening() }
+        // Stop dictation on save, or restart if keeping panel open
+        if dictation.isListening {
+            if keepPanelOpen {
+                dictation.restartListening()
+            } else {
+                dictation.stopListening()
+            }
+        }
 
         var cleanTitle = taskText
         if let s = parsedPriorityString   { cleanTitle = cleanTitle.replacingOccurrences(of: s, with: "") }
