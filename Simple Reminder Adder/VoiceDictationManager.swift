@@ -104,7 +104,19 @@ final class VoiceDictationManager: ObservableObject {
 
         let inputNode = audioEngine.inputNode
         let recordingFormat = inputNode.outputFormat(forBus: 0)
+        
+        guard recordingFormat.channelCount > 0 else {
+            // Fail safely if hardware reports 0 channels to avoid crashes
+            return
+        }
 
+        // On macOS, the input node must be connected to the main mixer node.
+        // Otherwise, the audio graph may consider the input bus inactive or disconnected,
+        // which causes a kAudioUnitErr_InvalidElement (-10877) when tapped.
+        audioEngine.connect(inputNode, to: audioEngine.mainMixerNode, format: recordingFormat)
+        audioEngine.mainMixerNode.outputVolume = 0.0
+
+        inputNode.removeTap(onBus: 0) // Ensure no existing tap is conflicting
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
             guard let self else { return }
             self.recognitionRequest?.append(buffer)
