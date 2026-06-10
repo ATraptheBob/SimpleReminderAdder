@@ -18,5 +18,5 @@ enum PanelMotionBlur {
         layer.masksToBounds = false
         layer.filters = [blur]
     }
-} 
+}
 
