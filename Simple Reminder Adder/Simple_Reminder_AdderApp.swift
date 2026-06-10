@@ -29,9 +29,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var lastSavedReminderID: String? = nil
 
     private var listPickerIsOpen: Bool = false
-    private let mainInputBarHeight: CGFloat = 58
     private let mainPanelCollapsedHeight: CGFloat = 58
-    private let mainPanelListPickerExpandedHeight: CGFloat = 296
+    private let mainPanelListPickerExpandedHeight: CGFloat = 260
+    
+    // Panel expansion constants and state
+    private let maxPanelWidth: CGFloat = 580
+    private let idleWidth: CGFloat = 140
+    private let idleHeight: CGFloat = 0
+    private let minExpandedWidth: CGFloat = 260
+    private let tabHeight: CGFloat = 32
+    private var isIdleMode: Bool = true
+    private var isTabVisible: Bool = true
+    private var currentTextWidth: CGFloat = 0
 
     private var chipsState: (
         priority: Int,
@@ -70,7 +79,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // causes safe area insets (text clipping). Unlike .fullSizeContentView alone,
         // .borderless is a valid mask and prevents constraint loop crashes during resize.
         panel = FloatingPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 580, height: 58),
+            contentRect: NSRect(x: 0, y: 0, width: idleWidth, height: idleHeight + tabHeight),
             styleMask: [.borderless]
         )
         panel.contentView = NSHostingView(rootView: QuickAddView())
@@ -157,6 +166,36 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             object: nil, queue: .main
         ) { [weak self] _ in
             self?.hidePanel()
+        }
+
+        NotificationCenter.default.addObserver(
+            forName: .textContentSizeChanged,
+            object: nil, queue: .main
+        ) { [weak self] note in
+            guard let self else { return }
+            let textWidth = note.userInfo?["textWidth"] as? CGFloat ?? 0
+            self.currentTextWidth = textWidth
+            self.resizePanelForText(textWidth: textWidth)
+        }
+
+        NotificationCenter.default.addObserver(
+            forName: .idleModeChanged,
+            object: nil, queue: .main
+        ) { [weak self] note in
+            guard let self else { return }
+            let isIdle = note.userInfo?["isIdle"] as? Bool ?? true
+            self.isIdleMode = isIdle
+            self.resizePanelForText(textWidth: self.currentTextWidth)
+        }
+
+        NotificationCenter.default.addObserver(
+            forName: .waveformTabVisibilityChanged,
+            object: nil, queue: .main
+        ) { [weak self] note in
+            guard let self else { return }
+            let visible = note.userInfo?["visible"] as? Bool ?? false
+            self.isTabVisible = visible
+            self.resizePanelForText(textWidth: self.currentTextWidth)
         }
 
         showPanel()
@@ -415,15 +454,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         chipsOverlayState.priorityExpanded = false
         PanelMotionBlur.setRadius(0, on: panel.contentView)
         if mainPanelUsesSearchExpansion {
-            var f = panel.frame
-            let dh = mainPanelCollapsedHeight - f.size.height
-            f.size.height = mainPanelCollapsedHeight
-            f.origin.y   -= dh
-            panel.setFrame(f, display: true, animate: false)
             mainPanelUsesSearchExpansion = false
-        } else {
-            resizeMainPanelForListPicker(open: false)
         }
+        
+        // Let QuickAddView maintain the idle mode state.
+        // We do not force reset it here so that if the user re-opens with a draft, it doesn't clip.
         panel.orderOut(nil)
         panel.alphaValue = 1
         chipsPanel?.orderOut(nil)
@@ -433,15 +468,29 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         chipsState = (0, nil, nil, false, false, false, false, nil, nil)
     }
 
-    private func resizeMainPanelForListPicker(open: Bool) {
-        mainPanelUsesSearchExpansion = false
-        let newH = open ? mainPanelListPickerExpandedHeight : mainPanelCollapsedHeight
+    private func updatePanelFrame(targetW: CGFloat, targetH: CGFloat, oldIdleMode: Bool, oldTabVisible: Bool) {
         var f = panel.frame
-        guard abs(f.size.height - newH) > 0.5 else {
+        guard abs(f.size.height - targetH) > 0.5 || abs(f.size.width - targetW) > 0.5 else {
             DispatchQueue.main.async { [weak self] in self?.syncChipsPanel() }
             return
         }
-        f.size.height = newH
+        
+        let oldTabH: CGFloat = oldTabVisible ? tabHeight : 0
+        let oldInputBarH: CGFloat = oldIdleMode ? idleHeight : mainPanelCollapsedHeight
+        let oldCenterY_in_window = oldTabH + oldInputBarH / 2.0
+        let screen_center_y = f.origin.y + oldCenterY_in_window
+        
+        let newTabH: CGFloat = self.isTabVisible ? tabHeight : 0
+        let newInputBarH: CGFloat = self.isIdleMode ? idleHeight : mainPanelCollapsedHeight
+        let newCenterY_in_window = newTabH + newInputBarH / 2.0
+        
+        let dw = targetW - f.size.width
+        
+        f.size.width = targetW
+        f.size.height = targetH
+        f.origin.x -= dw / 2
+        f.origin.y = screen_center_y - newCenterY_in_window
+        
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.28
             ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.16, 1.0, 0.3, 1.0)
@@ -452,34 +501,51 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    // ANIMATION FIX: animate search panel resize instead of instant snap
+    private func resizeMainPanelForListPicker(open: Bool) {
+        let oldIdleMode = self.isIdleMode
+        let oldTabVisible = self.isTabVisible
+        mainPanelUsesSearchExpansion = false
+        let baseH = open ? mainPanelListPickerExpandedHeight : (isIdleMode ? idleHeight : mainPanelCollapsedHeight)
+        let newH = baseH + (isTabVisible ? tabHeight : 0)
+        let newW = open ? maxPanelWidth : (isIdleMode ? idleWidth : min(maxPanelWidth, max(minExpandedWidth, currentTextWidth + 80)))
+        
+        updatePanelFrame(targetW: newW, targetH: newH, oldIdleMode: oldIdleMode, oldTabVisible: oldTabVisible)
+        
+        if open && isIdleMode {
+            isIdleMode = false
+        } else if !open && newW == idleWidth && !isIdleMode {
+            isIdleMode = true
+        }
+    }
+
     private func resizeMainPanelForSearchLayout(open: Bool, auxiliaryHeight: CGFloat) {
         guard !listPickerIsOpen else { return }
-        var f = panel.frame
-        let oldH = f.size.height
-        let targetH: CGFloat
+        let oldIdleMode = self.isIdleMode
+        let oldTabVisible = self.isTabVisible
+        let baseH: CGFloat
         if open {
-            targetH = mainInputBarHeight + max(auxiliaryHeight, 72)
             mainPanelUsesSearchExpansion = true
+            baseH = mainPanelCollapsedHeight + auxiliaryHeight
         } else {
-            targetH = listPickerIsOpen ? mainPanelListPickerExpandedHeight : mainPanelCollapsedHeight
             mainPanelUsesSearchExpansion = false
+            baseH = isIdleMode ? idleHeight : mainPanelCollapsedHeight
         }
-        guard abs(targetH - oldH) > 0.5 else {
-            DispatchQueue.main.async { [weak self] in self?.syncChipsPanel() }
-            return
-        }
-        let dh = targetH - oldH
-        f.size.height  = targetH
-        f.origin.y    -= dh
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.28
-            ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.16, 1.0, 0.3, 1.0)
-            ctx.allowsImplicitAnimation = true
-            panel.animator().setFrame(f, display: true)
-        } completionHandler: { [weak self] in
-            self?.syncChipsPanel()
-        }
+        let targetW = open ? maxPanelWidth : (isIdleMode ? idleWidth : min(maxPanelWidth, max(minExpandedWidth, currentTextWidth + 80)))
+        let targetH = baseH + (isTabVisible ? tabHeight : 0)
+        
+        updatePanelFrame(targetW: targetW, targetH: targetH, oldIdleMode: oldIdleMode, oldTabVisible: oldTabVisible)
+    }
+    
+    private func resizePanelForText(textWidth: CGFloat) {
+        guard !searchModeIsOpen && !listPickerIsOpen else { return }
+        let oldIdleMode = self.isIdleMode
+        let oldTabVisible = self.isTabVisible
+        
+        let targetWidth = isIdleMode ? idleWidth : min(maxPanelWidth, max(minExpandedWidth, textWidth + 80))
+        let baseHeight = isIdleMode ? idleHeight : mainPanelCollapsedHeight
+        let targetHeight = baseHeight + (isTabVisible ? tabHeight : 0)
+        
+        updatePanelFrame(targetW: targetWidth, targetH: targetHeight, oldIdleMode: oldIdleMode, oldTabVisible: oldTabVisible)
     }
 
     // MARK: - Chips panel
@@ -582,7 +648,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         if chipsPanel?.isVisible == false {
             // Animate in: start at the panel midY, drop to resting position below.
-            let anchorY   = panelFrame.minY + mainInputBarHeight / 2
+            let anchorY   = panelFrame.minY + mainPanelCollapsedHeight / 2
             let startFrame = NSRect(
                 x: panelFrame.midX - safeSize.width / 2,
                 y: anchorY - safeSize.height / 2,

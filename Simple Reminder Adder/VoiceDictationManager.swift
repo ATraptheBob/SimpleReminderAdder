@@ -10,6 +10,12 @@ final class VoiceDictationManager: ObservableObject {
     @Published private(set) var transcript  = ""
     @Published var liveAmplitude: Float = 0.0
     
+    /// Set by the view when the user manually edits the text field (e.g. deletes text).
+    /// While true, transcript updates are suppressed unless the new transcript is
+    /// substantively longer, preventing stale partial results from overwriting user edits.
+    var userDidEdit = false
+    private var lastPublishedLength = 0
+    
     private var committedTranscript = ""
     private var currentFullTranscript = ""
 
@@ -73,6 +79,8 @@ final class VoiceDictationManager: ObservableObject {
     func markTranscriptCommitted() {
         committedTranscript = currentFullTranscript
         transcript = ""
+        lastPublishedLength = 0
+        userDidEdit = false
     }
 
     // MARK: - Session
@@ -83,6 +91,8 @@ final class VoiceDictationManager: ObservableObject {
         transcript = ""
         committedTranscript = ""
         currentFullTranscript = ""
+        lastPublishedLength = 0
+        userDidEdit = false
 
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
@@ -159,7 +169,23 @@ final class VoiceDictationManager: ObservableObject {
                             }
                         }
                     }
-                    self.transcript = newText.trimmingCharacters(in: .whitespaces)
+                    let trimmed = newText.trimmingCharacters(in: .whitespaces)
+                    
+                    // BUG FIX: If user manually edited (deleted text), only accept
+                    // transcript updates that are genuinely new content (longer than
+                    // what was last published). This prevents stale partial results
+                    // from the recognizer from overwriting user deletions.
+                    if self.userDidEdit {
+                        if trimmed.count > self.lastPublishedLength {
+                            self.userDidEdit = false
+                            self.lastPublishedLength = trimmed.count
+                            self.transcript = trimmed
+                        }
+                        // else: skip this stale update
+                    } else {
+                        self.lastPublishedLength = trimmed.count
+                        self.transcript = trimmed
+                    }
                 }
             }
 

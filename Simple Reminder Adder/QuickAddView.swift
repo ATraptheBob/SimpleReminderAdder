@@ -2,6 +2,72 @@ import SwiftUI
 import AppKit
 import EventKit
 
+struct BubbleShape: Shape {
+    var cornerRadius: CGFloat
+    var tabProgress: CGFloat
+    
+    var animatableData: AnimatablePair<CGFloat, CGFloat> {
+        get { AnimatablePair(cornerRadius, tabProgress) }
+        set { cornerRadius = newValue.first; tabProgress = newValue.second }
+    }
+    
+    func path(in rect: CGRect) -> Path {
+        var p = Path()
+        let w = rect.width
+        let tailH = 32 * tabProgress
+        let h = rect.height - tailH
+        let r = cornerRadius
+        let tailW: CGFloat = 140
+        let tailR: CGFloat = 16 * (tabProgress > 0 ? 1 : 0)
+        let innerR: CGFloat = 12 * (tabProgress > 0 ? 1 : 0)
+        
+        if h <= 0.5 { // Only the tail is visible
+            let tabRect = CGRect(x: (w - tailW) / 2, y: 0, width: tailW, height: tailH)
+            p.addRoundedRect(in: tabRect, cornerSize: CGSize(width: tailR, height: tailR), style: .continuous)
+            return p
+        }
+        
+        if tabProgress == 0 {
+            p.addRoundedRect(in: rect, cornerSize: CGSize(width: r, height: r), style: .continuous)
+            return p
+        }
+        
+        let safeInnerR = min(innerR, (w - tailW) / 2)
+        
+        p.move(to: CGPoint(x: r, y: 0))
+        p.addLine(to: CGPoint(x: w - r, y: 0))
+        p.addArc(tangent1End: CGPoint(x: w, y: 0), tangent2End: CGPoint(x: w, y: r), radius: r)
+        p.addLine(to: CGPoint(x: w, y: h - r))
+        p.addArc(tangent1End: CGPoint(x: w, y: h), tangent2End: CGPoint(x: w - r, y: h), radius: r)
+        
+        let tailMaxX = (w + tailW) / 2
+        let tailMinX = (w - tailW) / 2
+        
+        p.addLine(to: CGPoint(x: tailMaxX + safeInnerR, y: h))
+        p.addArc(tangent1End: CGPoint(x: tailMaxX, y: h), tangent2End: CGPoint(x: tailMaxX, y: h + safeInnerR), radius: safeInnerR)
+        
+        p.addLine(to: CGPoint(x: tailMaxX, y: h + tailH - tailR))
+        p.addArc(tangent1End: CGPoint(x: tailMaxX, y: h + tailH), tangent2End: CGPoint(x: tailMaxX - tailR, y: h + tailH), radius: tailR)
+        
+        p.addLine(to: CGPoint(x: tailMinX + tailR, y: h + tailH))
+        p.addArc(tangent1End: CGPoint(x: tailMinX, y: h + tailH), tangent2End: CGPoint(x: tailMinX, y: h + tailH - tailR), radius: tailR)
+        
+        p.addLine(to: CGPoint(x: tailMinX, y: h + safeInnerR))
+        p.addArc(tangent1End: CGPoint(x: tailMinX, y: h), tangent2End: CGPoint(x: tailMinX - safeInnerR, y: h), radius: safeInnerR)
+        
+        p.addLine(to: CGPoint(x: r, y: h))
+        p.addArc(tangent1End: CGPoint(x: 0, y: h), tangent2End: CGPoint(x: 0, y: h - r), radius: r)
+        
+        p.addLine(to: CGPoint(x: 0, y: r))
+        p.addArc(tangent1End: CGPoint(x: 0, y: 0), tangent2End: CGPoint(x: r, y: 0), radius: r)
+        
+        p.closeSubpath()
+        return p
+    }
+}
+
+import EventKit
+
 extension Notification.Name {
     static let quickAddTabAcceptSuggestion = Notification.Name("QuickAddTabAcceptSuggestion")
     static let mainPanelListPickerLayout   = Notification.Name("MainPanelListPickerLayout")
@@ -30,12 +96,11 @@ extension Notification.Name {
     static let searchDeleteSelected        = Notification.Name("SearchDeleteSelected")
     static let searchResultDelete          = Notification.Name("SearchResultDelete")
     static let upArrowRecall               = Notification.Name("UpArrowRecall")
+    static let textContentSizeChanged      = Notification.Name("TextContentSizeChanged")
+    static let waveformTabVisibilityChanged = Notification.Name("WaveformTabVisibilityChanged")
+    static let idleModeChanged             = Notification.Name("IdleModeChanged")
 }
 
-// MARK: - ChipSet
-// BUG FIX: was `hasDate: Bool` — storing only a bool meant changing "at 5pm" → "at 6pm"
-// left hasDate==true both times, so postIfChipsChanged() saw no diff and skipped the notification.
-// Now stores the actual Date? so any time-value change triggers a re-render.
 private struct ChipSet: Equatable {
     var priority: Int
     var date: Date?
@@ -58,7 +123,6 @@ private let inputBarHeight: CGFloat = 58
 private let listPickerSpacing: CGFloat = 6
 private let listPickerMaxScroll: CGFloat = 220
 
-// MARK: - Cached DateFormatter (created once, reused everywhere)
 private let sharedDateFormatter: DateFormatter = {
     let fmt = DateFormatter()
     fmt.dateStyle = .short
@@ -66,7 +130,6 @@ private let sharedDateFormatter: DateFormatter = {
     return fmt
 }()
 
-// MARK: - Max search index size (prevents unbounded memory for power users)
 private let searchIndexMaxEntries = 500
 
 struct QuickAddView: View {
@@ -75,9 +138,10 @@ struct QuickAddView: View {
     private let eventStore = EKEventStore()
 
     @State private var taskText: String = ""
+    @FocusState private var isInputFocused: Bool
+    @State private var previousTaskTextLength: Int = 0
     @State private var lists: [EKCalendar] = []
     @State private var listRegexCache: [(EKCalendar, NSRegularExpression)] = []
-    @FocusState private var isInputFocused: Bool
 
     @State private var parsedDate: Date?        = nil
     @State private var parsedDateString: String? = nil
@@ -109,14 +173,22 @@ struct QuickAddView: View {
     @State private var searchIndexTask: Task<Void, Never>?
     @State private var searchSelectedIndex: Int = 0
 
-    // Draft recovery
     @State private var showDraftRestoredBadge: Bool = false
     @AppStorage("draftInput") private var savedDraft: String = ""
     @AppStorage("lastAddedText") private var lastAddedText: String = ""
     @AppStorage("keepPanelOpen") private var keepPanelOpenSetting: Bool = false
 
-    // Voice dictation
     @StateObject private var dictation = VoiceDictationManager()
+
+    // MARK: - Computed States
+
+    private var isIdleMode: Bool {
+        taskText.isEmpty && !isSearchMode && slashQuery == nil
+    }
+
+    private var effectiveCornerRadius: CGFloat {
+        isIdleMode ? PanelChrome.pillCorner : PanelChrome.outerCorner
+    }
 
     private var slashQuery: (base: String, filter: String)? {
         if isSearchMode { return nil }
@@ -132,11 +204,9 @@ struct QuickAddView: View {
 
     private var searchPanelAuxiliaryHeight: CGFloat {
         guard isSearchMode else { return 0 }
-        if searchHitRows.isEmpty { return 96 }
-        return min(260, 12 + CGFloat(searchHitRows.count) * 48 + 20)
+        return 260
     }
 
-    /// Computed bool for the default-list pill — only flips when visibility actually changes.
     private var showDefaultPill: Bool {
         !isSearchMode && slashQuery == nil && parsedList == nil && !taskText.isEmpty
     }
@@ -158,42 +228,46 @@ struct QuickAddView: View {
     }
 
     var body: some View {
-        Group {
-            Group {
-                mainContent
-                    .onChange(of: taskText) { _, new in
-                        handleTaskTextChange(new)
-                    }
-                    .onChange(of: isSearchMode) { _, active in
-                        handleSearchModeChange(active)
-                    }
-                    .onChange(of: searchHitRows.count) { _, _ in
-                        if isSearchMode { postMainPanelSearchLayout() }
-                    }
-                    .onAppear {
-                        requestPermissionsAndFetchLists()
-                        isInputFocused = true
-                    }
-                    .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("PanelDidOpen"))) { _ in
-                        handlePanelDidOpen()
-                    }
-                    .onReceive(NotificationCenter.default.publisher(for: .upArrowRecall)) { _ in
-                        handleUpArrowRecall()
-                    }
-                    .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("OpenSettingsRequest"))) { _ in
-                        openSettings()
-                    }
-                    .onReceive(NotificationCenter.default.publisher(for: .quickAddTabAcceptSuggestion)) { _ in
-                        if slashQuery != nil { moveListSelection(delta: 1) }
-                        else { acceptSuggestion() }
-                    }
-                    .onReceive(NotificationCenter.default.publisher(for: .listPickerNavigate)) { note in
-                        guard slashQuery != nil, let d = note.userInfo?["delta"] as? Int else { return }
-                        moveListSelection(delta: d)
-                    }
-                    .onReceive(NotificationCenter.default.publisher(for: .listPickerConfirm)) { _ in
-                        if slashQuery != nil { applyListPick(at: clampedListIndex) }
-                    }
+        let step1 = mainContent
+            .onChange(of: taskText) { _, new in
+                if dictation.isListening && new.count < previousTaskTextLength {
+                    dictation.userDidEdit = true
+                }
+                previousTaskTextLength = new.count
+                handleTaskTextChange(new)
+                postTextContentSize(for: new)
+            }
+            .onChange(of: isSearchMode) { _, active in
+                handleSearchModeChange(active)
+            }
+            .onChange(of: searchHitRows.count) { _, _ in
+                if isSearchMode { postMainPanelSearchLayout() }
+            }
+            .onAppear {
+                requestPermissionsAndFetchLists()
+                isInputFocused = true
+            }
+            .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("PanelDidOpen"))) { _ in
+                handlePanelDidOpen()
+            }
+
+        let step2 = step1
+            .onReceive(NotificationCenter.default.publisher(for: .upArrowRecall)) { _ in
+                handleUpArrowRecall()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("OpenSettingsRequest"))) { _ in
+                openSettings()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .quickAddTabAcceptSuggestion)) { _ in
+                if slashQuery != nil { moveListSelection(delta: 1) }
+                else { acceptSuggestion() }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .listPickerNavigate)) { note in
+                guard slashQuery != nil, let d = note.userInfo?["delta"] as? Int else { return }
+                moveListSelection(delta: d)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .listPickerConfirm)) { _ in
+                if slashQuery != nil { applyListPick(at: clampedListIndex) }
             }
             .onReceive(NotificationCenter.default.publisher(for: .listPickerCancel)) { _ in
                 cancelListPicker()
@@ -202,6 +276,8 @@ struct QuickAddView: View {
                 guard !isSearchMode else { return }
                 saveTask(keepPanelOpen: true)
             }
+
+        let step3 = step2
             .onReceive(NotificationCenter.default.publisher(for: .searchHotkeyToggle)) { _ in
                 toggleSearchModeFromHotkey()
             }
@@ -232,16 +308,25 @@ struct QuickAddView: View {
                 activateSearchSelection()
             }
             .onReceive(NotificationCenter.default.publisher(for: .escapePressed)) { _ in
-                if !taskText.isEmpty || dictation.isListening {
-                    taskText = ""
-                    if dictation.isListening { dictation.stopListening() }
-                } else {
-                    NotificationCenter.default.post(name: .hidePanelRequest, object: nil)
+                if dictation.isListening {
+                    dictation.stopListening()
+                    return
                 }
+                if isSearchMode {
+                    isSearchMode = false
+                    taskText = ""
+                    isInputFocused = true
+                    return
+                }
+                if let currentSlash = slashQuery {
+                    taskText = currentSlash.base
+                    isInputFocused = true
+                    return
+                }
+                NotificationCenter.default.post(name: .hidePanelRequest, object: nil)
             }
             .onReceive(NotificationCenter.default.publisher(for: .panelDidClose)) { _ in
                 if dictation.isListening { dictation.stopListening() }
-                // Save draft on panel close
                 if !taskText.isEmpty {
                     savedDraft = taskText
                 }
@@ -254,48 +339,77 @@ struct QuickAddView: View {
                 guard let id = note.userInfo?["id"] as? String else { return }
                 self.deleteReminder(id: id)
             }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .chipPrioritySliderCommit)) { note in
-            guard let v = note.userInfo?["value"] as? Int else { return }
-            parsedPriority = v
-            applyPriorityPrefixToTaskText()
-            parseText()
-            postChipState()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .chipSwipeDelete)) { note in
-            guard let k = note.userInfo?["kind"] as? String else { return }
-            applyChipSwipeDelete(kind: k)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .chipSwipeDuplicate)) { note in
-            guard let k = note.userInfo?["kind"] as? String else { return }
-            applyChipSwipeDuplicate(kind: k)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("UndoLastTask"))) { note in
-            guard let id = note.userInfo?["reminderID"] as? String,
-                  let reminder = eventStore.calendarItem(withIdentifier: id) as? EKReminder else { return }
-            do {
-                try eventStore.remove(reminder, commit: true)
-                ReminderHaptics.successSnap()
-                // Brief visual ack — reuse the flash in reverse tint
-                withAnimation(.easeOut(duration: 0.15)) { saveFlashActive = true }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    withAnimation(.easeOut(duration: 0.2)) { saveFlashActive = false }
-                }
-            } catch {
-                NSSound.beep()
+
+        let step4 = step3
+            .onReceive(NotificationCenter.default.publisher(for: .chipPrioritySliderCommit)) { note in
+                guard let v = note.userInfo?["value"] as? Int else { return }
+                parsedPriority = v
+                applyPriorityPrefixToTaskText()
+                parseText()
+                postChipState()
             }
-        }
-        // Stream dictation transcript into the text field
-        .onReceive(dictation.$transcript) { text in
-            guard dictation.isListening, !text.isEmpty else { return }
-            taskText = text
-        }
+            .onReceive(NotificationCenter.default.publisher(for: .chipSwipeDelete)) { note in
+                guard let k = note.userInfo?["kind"] as? String else { return }
+                applyChipSwipeDelete(kind: k)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .chipSwipeDuplicate)) { note in
+                guard let k = note.userInfo?["kind"] as? String else { return }
+                applyChipSwipeDuplicate(kind: k)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("UndoLastTask"))) { note in
+                guard let id = note.userInfo?["reminderID"] as? String,
+                      let reminder = eventStore.calendarItem(withIdentifier: id) as? EKReminder else { return }
+                do {
+                    try eventStore.remove(reminder, commit: true)
+                    ReminderHaptics.successSnap()
+                    // Brief visual ack — reuse the flash in reverse tint
+                    withAnimation(.easeOut(duration: 0.15)) { saveFlashActive = true }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        withAnimation(.easeOut(duration: 0.2)) { saveFlashActive = false }
+                    }
+                } catch {
+                    NSSound.beep()
+                }
+            }
+        
+        let step5 = step4
+            // Stream dictation transcript into the text field
+            .onReceive(dictation.$transcript) { text in
+                guard dictation.isListening, !text.isEmpty else { return }
+                // Only accept transcript updates — the userDidEdit flag in
+                // VoiceDictationManager already filters stale partial results,
+                // so we can trust whatever comes through here.
+                previousTaskTextLength = text.count
+                taskText = text
+            }
+        
+        return step5
     }
 
     // MARK: - Body
 
+    // Use a derived state for the tab progress to smoothly animate its appearance
+    private var isTabVisible: Bool {
+        dictation.isListening || isIdleMode
+    }
+
     private var mainContent: some View {
         VStack(spacing: 0) {
+            Spacer(minLength: 0)
+            
+            if isSearchMode {
+                SearchResultsMenuView(hits: searchHitRows, selectedIndex: searchSelectedIndex)
+                    .padding(.horizontal, 6)
+                    .padding(.bottom, listPickerSpacing)
+                    .padding(.top, 6)
+                    .transition(
+                        .asymmetric(
+                            insertion: .opacity.combined(with: .offset(y: 8)),
+                            removal:   .opacity.combined(with: .offset(y: 8))
+                        )
+                    )
+            }
+            
             if slashQuery != nil {
                 ListPickerView(
                     calendars: filteredListsForPicker,
@@ -303,8 +417,8 @@ struct QuickAddView: View {
                     onSelectIndex: { applyListPick(at: $0) }
                 )
                 .padding(.horizontal, 6)
-                .padding(.top, 6)
                 .padding(.bottom, listPickerSpacing)
+                .padding(.top, 6)
                 .transition(
                     .asymmetric(
                         insertion: .opacity.combined(with: .offset(y: 8)),
@@ -314,29 +428,69 @@ struct QuickAddView: View {
             }
 
             inputBarContent
-
-            if isSearchMode {
-                SearchResultsMenuView(hits: searchHitRows, selectedIndex: searchSelectedIndex)
-                    .padding(.horizontal, 6)
-                    .padding(.top, listPickerSpacing)
-                    .padding(.bottom, 6)
-                    .transition(
-                        .asymmetric(
-                            insertion: .opacity.combined(with: .offset(y: -8)),
-                            removal:   .opacity.combined(with: .offset(y: -8))
-                        )
-                    )
+            
+            if isTabVisible {
+                waveformTab
+                    .frame(height: 32)
+                    .transition(.opacity)
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: slashQuery != nil ? .bottom : .top)
-        // ANIMATION FIX: removed broad .animation() modifiers that caused spillover animations
-        // on every keystroke. Transitions are now driven by explicit withAnimation in handlers.
+        .frame(maxWidth: .infinity, alignment: .bottom) // Bottom alignment is important for upward expansion
         .background(VisualEffectView())
-        .clipShape(RoundedRectangle(cornerRadius: PanelChrome.outerCorner, style: .continuous))
+        .clipShape(BubbleShape(cornerRadius: effectiveCornerRadius, tabProgress: isTabVisible ? 1.0 : 0.0))
         .overlay(
-            RoundedRectangle(cornerRadius: PanelChrome.outerCorner, style: .continuous)
+            BubbleShape(cornerRadius: effectiveCornerRadius, tabProgress: isTabVisible ? 1.0 : 0.0)
                 .stroke(PanelChrome.strokeSubtle, lineWidth: 1)
         )
+        .animation(.spring(response: 0.3, dampingFraction: 0.85), value: effectiveCornerRadius)
+        .animation(.spring(response: 0.25, dampingFraction: 0.8), value: isTabVisible)
+        .animation(.spring(response: 0.25, dampingFraction: 0.8), value: isIdleMode)
+        .onChange(of: isTabVisible) { _, newValue in
+            NotificationCenter.default.post(
+                name: .waveformTabVisibilityChanged,
+                object: nil,
+                userInfo: ["visible": newValue]
+            )
+        }
+        .onChange(of: isIdleMode) { _, newValue in
+            NotificationCenter.default.post(
+                name: .idleModeChanged,
+                object: nil,
+                userInfo: ["isIdle": newValue]
+            )
+        }
+    }
+    
+    private var waveformTab: some View {
+        HStack(spacing: 3) {
+            Spacer()
+            ForEach(0..<16, id: \.self) { i in
+                let multiplier = CGFloat(sin(Double(i) * 0.5) * 0.35 + 0.65)
+                let baseHeight: CGFloat = dictation.isListening
+                    ? CGFloat(dictation.liveAmplitude) * 20 * multiplier
+                    : 3.0 * multiplier
+                let h = max(2.5, min(24, baseHeight))
+                Capsule()
+                    .fill(
+                        dictation.isListening
+                            ? LinearGradient(
+                                colors: [Color.red.opacity(0.75), PanelChrome.accentColor.opacity(0.85)],
+                                startPoint: .bottom,
+                                endPoint: .top
+                            )
+                            : LinearGradient(
+                                colors: [Color.primary.opacity(0.15), Color.primary.opacity(0.25)],
+                                startPoint: .bottom,
+                                endPoint: .top
+                            )
+                    )
+                    .frame(width: 3, height: h)
+                    .animation(.interactiveSpring(response: 0.12, dampingFraction: 0.65), value: dictation.liveAmplitude)
+            }
+            Spacer()
+        }
+        .frame(width: 140)
+        .allowsHitTesting(false)
     }
 
     // MARK: - Handlers
@@ -461,7 +615,8 @@ struct QuickAddView: View {
 
     private var inputBarContent: some View {
         ZStack(alignment: .leading) {
-            if taskText.isEmpty && slashQuery == nil {
+            // Placeholder
+            if taskText.isEmpty && slashQuery == nil && !isIdleMode {
                 Text(
                     isSearchMode
                         ? "Search reminders…  ·  ⌘F to close"
@@ -520,35 +675,10 @@ struct QuickAddView: View {
                 .allowsHitTesting(false)
             }
 
-            // Dictation Waveform Visualizer
-            if dictation.isListening {
-                HStack(spacing: 3) {
-                    Spacer()
-                    ForEach(0..<16, id: \.self) { i in
-                        let multiplier = CGFloat(sin(Double(i) * 0.5) * 0.35 + 0.65)
-                        let rawHeight = CGFloat(dictation.liveAmplitude) * 20 * multiplier
-                        let h = max(2.5, min(24, rawHeight))
-                        Capsule()
-                            .fill(
-                                LinearGradient(
-                                    colors: [Color.red.opacity(0.75), PanelChrome.accentColor.opacity(0.85)],
-                                    startPoint: .bottom,
-                                    endPoint: .top
-                                )
-                            )
-                            .frame(width: 3, height: h)
-                            .animation(.interactiveSpring(response: 0.12, dampingFraction: 0.65), value: dictation.liveAmplitude)
-                    }
-                    Spacer()
-                }
-                .frame(height: 28)
-                .frame(maxHeight: .infinity, alignment: .bottom)
-                .padding(.bottom, 4)
-                .allowsHitTesting(false)
-                .transition(.opacity.combined(with: .scale(scale: 0.95)))
-            }
+
         }
-        .frame(height: inputBarHeight, alignment: .center)
+        .frame(height: isIdleMode ? 0 : inputBarHeight, alignment: .center)
+        .opacity(isIdleMode ? 0 : 1)
         .clipped()
         .transaction { transaction in
             transaction.animation = nil
@@ -575,86 +705,29 @@ struct QuickAddView: View {
             }
         }
         .overlay(alignment: .trailing) {
-            HStack(spacing: 6) {
-                // Default-list destination pill — moved here to prevent clipping
-                if showDefaultPill, let defaultName = lists.first?.title {
-                    HStack(spacing: 3) {
-                        Image(systemName: "arrow.right.circle")
-                            .font(.system(size: 9, weight: .semibold))
-                        Text(defaultName)
-                            .font(.system(size: 10, weight: .medium, design: .rounded))
-                    }
-                    .foregroundStyle(PanelChrome.listAccent.opacity(0.45))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(
-                        Capsule().fill(PanelChrome.listAccent.opacity(0.07))
-                    )
-                    .overlay(Capsule().stroke(PanelChrome.listAccent.opacity(0.13), lineWidth: 0.5))
-                    .transition(.opacity.combined(with: .scale(scale: 0.85, anchor: .trailing)))
-                    .animation(.easeOut(duration: 0.15), value: showDefaultPill)
-                }
-
-                // Microphone button for voice dictation
-                if !isSearchMode {
-                    Button {
-                        handleDictationToggle()
-                    } label: {
-                        ZStack {
-                            if dictation.isListening {
-                                // Pulsing ring while listening
-                                Circle()
-                                    .stroke(Color.red.opacity(0.35), lineWidth: 2)
-                                    .scaleEffect(1.6)
-                                    .opacity(0)
-                                    .animation(
-                                        .easeOut(duration: 1.2).repeatForever(autoreverses: false),
-                                        value: dictation.isListening
-                                    )
-                                Circle()
-                                    .stroke(Color.red.opacity(0.5), lineWidth: 1.5)
-                                    .scaleEffect(dictation.isListening ? 1.35 : 1.0)
-                                    .opacity(dictation.isListening ? 0 : 1)
-                                    .animation(
-                                        .easeInOut(duration: 0.8).repeatForever(autoreverses: true),
-                                        value: dictation.isListening
-                                    )
+            // Hide trailing controls in idle mode
+            if !isIdleMode {
+                HStack(spacing: 6) {
+                    if dripSessionCount > 0 {
+                        HStack(spacing: 3) {
+                            ForEach(0..<min(dripSessionCount, 6), id: \.self) { _ in
+                                Image(systemName: "checkmark.circle.fill")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.secondary.opacity(0.5))
                             }
-                            Image(systemName: dictation.isListening ? "mic.fill" : "mic")
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundStyle(
-                                    dictation.isListening
-                                        ? Color.red.opacity(0.9)
-                                        : Color.primary.opacity(0.35)
-                                )
-                                .scaleEffect(dictation.isListening ? 1.1 : 1.0)
-                                .animation(.spring(response: 0.2, dampingFraction: 0.7), value: dictation.isListening)
+                            if dripSessionCount > 6 {
+                                Text("+\(dripSessionCount - 6)")
+                                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                                    .foregroundStyle(.secondary.opacity(0.55))
+                            }
                         }
-                        .frame(width: 24, height: 24)
+                        .transition(.opacity.combined(with: .scale(scale: 0.8)))
+                        .animation(.spring(response: 0.15, dampingFraction: 0.8), value: dripSessionCount)
                     }
-                    .buttonStyle(.plain)
-                    .help("Voice dictation (⌘D)")
-                    .accessibilityLabel(dictation.isListening ? "Stop dictation" : "Start dictation")
                 }
-
-                if dripSessionCount > 0 {
-                    HStack(spacing: 3) {
-                        ForEach(0..<min(dripSessionCount, 6), id: \.self) { _ in
-                            Image(systemName: "checkmark.circle.fill")
-                                .font(.system(size: 11))
-                                .foregroundStyle(.secondary.opacity(0.5))
-                        }
-                        if dripSessionCount > 6 {
-                            Text("+\(dripSessionCount - 6)")
-                                .font(.system(size: 10, weight: .semibold, design: .rounded))
-                                .foregroundStyle(.secondary.opacity(0.55))
-                        }
-                    }
-                    .transition(.opacity.combined(with: .scale(scale: 0.8)))
-                    .animation(.spring(response: 0.15, dampingFraction: 0.8), value: dripSessionCount)
-                }
+                .padding(.trailing, 14)
+                .transition(.opacity)
             }
-            .padding(.trailing, 14)
         }
     }
 
@@ -765,13 +838,13 @@ struct QuickAddView: View {
             return
         }
         // BUG FIX: use actual `date: Date?` so a time-only change (5pm→6pm)
-        // still registers as a different ChipSet and triggers a re-render.
+        let effectiveList = parsedList?.title ?? (showDefaultPill ? lists.first?.title : nil)
         let current = ChipSet(
             priority: parsedPriority,
             date: parsedDate,
             showDatePill: showDatePill,
             showTimePill: showTimePill,
-            listName: parsedList?.title,
+            listName: effectiveList,
             recurrenceText: parsedRecurrenceString,
             locationTitle: parsedLocationTitle
         )
@@ -786,20 +859,34 @@ struct QuickAddView: View {
     }
 
     private func postChipState() {
+        let effectiveList = parsedList?.title ?? (showDefaultPill ? lists.first?.title : nil)
         NotificationCenter.default.post(
             name: NSNotification.Name("ParsedStateChanged"),
             object: nil,
             userInfo: [
                 "date":         parsedDate as Any,
-                "list":         parsedList?.title as Any,
+                "list":         effectiveList as Any,
                 "priority":     parsedPriority,
                 "showDatePill": showDatePill,
                 "showTimePill": showTimePill,
                 "glowDate":     showDatePill && parsedDate != nil,
                 "glowTime":     showTimePill && parsedDate != nil,
-                "recurrenceText": parsedRecurrenceString,
-                "locationTitle": parsedLocationTitle
+                "recurrenceText": parsedRecurrenceString as Any,
+                "locationTitle": parsedLocationTitle as Any
             ]
+        )
+    }
+
+    // MARK: - Layout text width reporting
+    private func postTextContentSize(for text: String) {
+        let nsText = text as NSString
+        let font = NSFont.systemFont(ofSize: 20, weight: .light)
+        let attrs: [NSAttributedString.Key: Any] = [.font: font]
+        let width = nsText.size(withAttributes: attrs).width
+        NotificationCenter.default.post(
+            name: .textContentSizeChanged,
+            object: nil,
+            userInfo: ["textWidth": width]
         )
     }
 

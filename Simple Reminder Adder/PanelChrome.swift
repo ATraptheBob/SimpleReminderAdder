@@ -13,6 +13,7 @@ public enum AppTheme: String, CaseIterable, Identifiable {
 /// Shared muted palette and radii for floating panels, chips, and menus.
 enum PanelChrome {
     static let outerCorner: CGFloat = 14
+    static let pillCorner: CGFloat = 22
     static let innerCorner: CGFloat = 10
     
     static var currentTheme: AppTheme {
