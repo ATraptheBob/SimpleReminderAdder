@@ -19,3 +19,4 @@ enum PanelMotionBlur {
         layer.filters = [blur]
     }
 }
+
