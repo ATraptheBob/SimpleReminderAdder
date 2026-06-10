@@ -1051,14 +1051,13 @@ struct QuickAddView: View {
         }
     }
     
-    // MARK: - Recurrence parsing
+    // MARK: - Pre-compiled recurrence patterns
+    // ⚡ Bolt: Pre-compiling NSRegularExpression objects here rather than inside
+    // `parseRecurrence` to avoid redundant allocations on every keystroke. This
+    // speeds up parsing considerably since creating regexes is expensive.
 
-    private func parseRecurrence(from text: String) -> (rule: EKRecurrenceRule?, matchedString: String?) {
-        let ns   = text as NSString
-        let full = NSRange(location: 0, length: ns.length)
-
-        // Simple frequency patterns
-        let freqPatterns: [(String, EKRecurrenceFrequency)] = [
+    private static let freqPatterns: [(NSRegularExpression, EKRecurrenceFrequency)] = {
+        let patterns: [(String, EKRecurrenceFrequency)] = [
             (#"(?i)\bevery\s+day\b"#,   .daily),
             (#"(?i)\bdaily\b"#,         .daily),
             (#"(?i)\bevery\s+week\b"#,  .weekly),
@@ -1069,37 +1068,57 @@ struct QuickAddView: View {
             (#"(?i)\bannually\b"#,      .yearly),
             (#"(?i)\byearly\b"#,        .yearly),
         ]
-        for (pattern, freq) in freqPatterns {
-            guard let re = try? NSRegularExpression(pattern: pattern),
-                  let m  = re.firstMatch(in: text, options: [], range: full),
-                  let r  = Range(m.range, in: text) else { continue }
-            let rule = EKRecurrenceRule(recurrenceWith: freq, interval: 1, end: nil)
-            return (rule, String(text[r]))
+        return patterns.compactMap { (pattern, freq) in
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+            return (regex, freq)
         }
+    }()
 
-        // "Every <weekday>" → weekly on that day
+    private static let weekdayPatterns: [(NSRegularExpression, EKWeekday)] = {
         let weekdayMap: [(String, EKWeekday)] = [
             ("monday", .monday), ("tuesday", .tuesday), ("wednesday", .wednesday),
             ("thursday", .thursday), ("friday", .friday),
             ("saturday", .saturday), ("sunday", .sunday),
         ]
-        for (name, wd) in weekdayMap {
+        return weekdayMap.compactMap { (name, wd) in
             let pattern = "(?i)\\bevery\\s+\(name)\\b"
-            guard let re = try? NSRegularExpression(pattern: pattern),
-                  let m  = re.firstMatch(in: text, options: [], range: full),
-                  let r  = Range(m.range, in: text) else { continue }
-            let rule = EKRecurrenceRule(
-                recurrenceWith: .weekly,
-                interval: 1,
-                daysOfTheWeek: [EKRecurrenceDayOfWeek(wd)],
-                daysOfTheMonth: nil,
-                monthsOfTheYear: nil,
-                weeksOfTheYear: nil,
-                daysOfTheYear: nil,
-                setPositions: nil,
-                end: nil
-            )
-            return (rule, String(text[r]))
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+            return (regex, wd)
+        }
+    }()
+
+    // MARK: - Recurrence parsing
+
+    private func parseRecurrence(from text: String) -> (rule: EKRecurrenceRule?, matchedString: String?) {
+        let ns   = text as NSString
+        let full = NSRange(location: 0, length: ns.length)
+
+        // Simple frequency patterns
+        for (re, freq) in Self.freqPatterns {
+            if let m  = re.firstMatch(in: text, options: [], range: full),
+               let r  = Range(m.range, in: text) {
+                let rule = EKRecurrenceRule(recurrenceWith: freq, interval: 1, end: nil)
+                return (rule, String(text[r]))
+            }
+        }
+
+        // "Every <weekday>" → weekly on that day
+        for (re, wd) in Self.weekdayPatterns {
+            if let m  = re.firstMatch(in: text, options: [], range: full),
+               let r  = Range(m.range, in: text) {
+                let rule = EKRecurrenceRule(
+                    recurrenceWith: .weekly,
+                    interval: 1,
+                    daysOfTheWeek: [EKRecurrenceDayOfWeek(wd)],
+                    daysOfTheMonth: nil,
+                    monthsOfTheYear: nil,
+                    weeksOfTheYear: nil,
+                    daysOfTheYear: nil,
+                    setPositions: nil,
+                    end: nil
+                )
+                return (rule, String(text[r]))
+            }
         }
         return (nil, nil)
     }
