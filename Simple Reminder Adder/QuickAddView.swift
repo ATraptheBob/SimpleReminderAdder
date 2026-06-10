@@ -21,24 +21,40 @@ struct BubbleShape: Shape {
         let tailR: CGFloat = 16 * (tabProgress > 0 ? 1 : 0)
         let innerR: CGFloat = 12 * (tabProgress > 0 ? 1 : 0)
         
+        let totalTailRadii = tailR + innerR
+        let scale = totalTailRadii > 0 ? min(1.0, tailH / totalTailRadii) : 0.0
+        
+        let safeTailR = max(0, min(tailR * scale, tailW / 2))
+        
+        let maxInnerR = max(0, (w - tailW) / 2)
+        let safeInnerR = max(0, min(innerR * scale, maxInnerR))
+        
+        // Prioritize top corners to prevent rectangular look when height collapses
+        let rTop = max(0, min(r, h, w / 2))
+        
+        // Constrain bottom corners by remaining height and width outside the tail
+        let maxBottomR = max(0, maxInnerR - safeInnerR)
+        let rBottom = max(0, min(r, h - rTop, maxBottomR))
+        
         if h <= 0.5 { // Only the tail is visible
             let tabRect = CGRect(x: (w - tailW) / 2, y: 0, width: tailW, height: tailH)
-            p.addRoundedRect(in: tabRect, cornerSize: CGSize(width: tailR, height: tailR), style: .continuous)
+            p.addRoundedRect(in: tabRect, cornerSize: CGSize(width: safeTailR, height: safeTailR), style: .continuous)
             return p
         }
         
         if tabProgress == 0 {
-            p.addRoundedRect(in: rect, cornerSize: CGSize(width: r, height: r), style: .continuous)
+            // Keep traditional rounding when the tail isn't drawn at all
+            let uniformR = max(0, min(r, h / 2, w / 2))
+            p.addRoundedRect(in: rect, cornerSize: CGSize(width: uniformR, height: uniformR), style: .continuous)
             return p
         }
         
-        let safeInnerR = min(innerR, (w - tailW) / 2)
+        p.move(to: CGPoint(x: rTop, y: 0))
+        p.addLine(to: CGPoint(x: w - rTop, y: 0))
+        p.addArc(tangent1End: CGPoint(x: w, y: 0), tangent2End: CGPoint(x: w, y: rTop), radius: rTop)
         
-        p.move(to: CGPoint(x: r, y: 0))
-        p.addLine(to: CGPoint(x: w - r, y: 0))
-        p.addArc(tangent1End: CGPoint(x: w, y: 0), tangent2End: CGPoint(x: w, y: r), radius: r)
-        p.addLine(to: CGPoint(x: w, y: h - r))
-        p.addArc(tangent1End: CGPoint(x: w, y: h), tangent2End: CGPoint(x: w - r, y: h), radius: r)
+        p.addLine(to: CGPoint(x: w, y: h - rBottom))
+        p.addArc(tangent1End: CGPoint(x: w, y: h), tangent2End: CGPoint(x: w - rBottom, y: h), radius: rBottom)
         
         let tailMaxX = (w + tailW) / 2
         let tailMinX = (w - tailW) / 2
@@ -46,20 +62,20 @@ struct BubbleShape: Shape {
         p.addLine(to: CGPoint(x: tailMaxX + safeInnerR, y: h))
         p.addArc(tangent1End: CGPoint(x: tailMaxX, y: h), tangent2End: CGPoint(x: tailMaxX, y: h + safeInnerR), radius: safeInnerR)
         
-        p.addLine(to: CGPoint(x: tailMaxX, y: h + tailH - tailR))
-        p.addArc(tangent1End: CGPoint(x: tailMaxX, y: h + tailH), tangent2End: CGPoint(x: tailMaxX - tailR, y: h + tailH), radius: tailR)
+        p.addLine(to: CGPoint(x: tailMaxX, y: h + tailH - safeTailR))
+        p.addArc(tangent1End: CGPoint(x: tailMaxX, y: h + tailH), tangent2End: CGPoint(x: tailMaxX - safeTailR, y: h + tailH), radius: safeTailR)
         
-        p.addLine(to: CGPoint(x: tailMinX + tailR, y: h + tailH))
-        p.addArc(tangent1End: CGPoint(x: tailMinX, y: h + tailH), tangent2End: CGPoint(x: tailMinX, y: h + tailH - tailR), radius: tailR)
+        p.addLine(to: CGPoint(x: tailMinX + safeTailR, y: h + tailH))
+        p.addArc(tangent1End: CGPoint(x: tailMinX, y: h + tailH), tangent2End: CGPoint(x: tailMinX, y: h + tailH - safeTailR), radius: safeTailR)
         
         p.addLine(to: CGPoint(x: tailMinX, y: h + safeInnerR))
         p.addArc(tangent1End: CGPoint(x: tailMinX, y: h), tangent2End: CGPoint(x: tailMinX - safeInnerR, y: h), radius: safeInnerR)
         
-        p.addLine(to: CGPoint(x: r, y: h))
-        p.addArc(tangent1End: CGPoint(x: 0, y: h), tangent2End: CGPoint(x: 0, y: h - r), radius: r)
+        p.addLine(to: CGPoint(x: rBottom, y: h))
+        p.addArc(tangent1End: CGPoint(x: 0, y: h), tangent2End: CGPoint(x: 0, y: h - rBottom), radius: rBottom)
         
-        p.addLine(to: CGPoint(x: 0, y: r))
-        p.addArc(tangent1End: CGPoint(x: 0, y: 0), tangent2End: CGPoint(x: r, y: 0), radius: r)
+        p.addLine(to: CGPoint(x: 0, y: rTop))
+        p.addArc(tangent1End: CGPoint(x: 0, y: 0), tangent2End: CGPoint(x: rTop, y: 0), radius: rTop)
         
         p.closeSubpath()
         return p
@@ -140,6 +156,7 @@ struct QuickAddView: View {
     @State private var taskText: String = ""
     @FocusState private var isInputFocused: Bool
     @State private var previousTaskTextLength: Int = 0
+    @State private var isDictationUpdate: Bool = false
     @State private var lists: [EKCalendar] = []
     @State private var listRegexCache: [(EKCalendar, NSRegularExpression)] = []
 
@@ -204,7 +221,12 @@ struct QuickAddView: View {
 
     private var searchPanelAuxiliaryHeight: CGFloat {
         guard isSearchMode else { return 0 }
-        return 260
+        if searchHitRows.isEmpty {
+            return 60 // Height for empty state "Type to filter reminders"
+        }
+        // Approximate row height (~54) + container padding (~36)
+        let calculatedHeight = CGFloat(searchHitRows.count) * 54.0 + 36.0
+        return min(260, calculatedHeight)
     }
 
     private var showDefaultPill: Bool {
@@ -230,8 +252,10 @@ struct QuickAddView: View {
     var body: some View {
         let step1 = mainContent
             .onChange(of: taskText) { _, new in
-                if dictation.isListening && new.count < previousTaskTextLength {
-                    dictation.userDidEdit = true
+                if isDictationUpdate {
+                    isDictationUpdate = false
+                } else if dictation.isListening {
+                    dictation.syncManualEdit(to: new)
                 }
                 previousTaskTextLength = new.count
                 handleTaskTextChange(new)
@@ -376,10 +400,8 @@ struct QuickAddView: View {
             // Stream dictation transcript into the text field
             .onReceive(dictation.$transcript) { text in
                 guard dictation.isListening, !text.isEmpty else { return }
-                // Only accept transcript updates — the userDidEdit flag in
-                // VoiceDictationManager already filters stale partial results,
-                // so we can trust whatever comes through here.
                 previousTaskTextLength = text.count
+                isDictationUpdate = true
                 taskText = text
             }
         
@@ -607,8 +629,7 @@ struct QuickAddView: View {
     // MARK: - Voice dictation
 
     private func handleDictationToggle() {
-        guard !isSearchMode else { return }
-        dictation.toggle()
+        dictation.toggle(prefix: taskText)
     }
 
     // MARK: - Input bar

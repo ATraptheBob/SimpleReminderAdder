@@ -10,14 +10,7 @@ final class VoiceDictationManager: ObservableObject {
     @Published private(set) var transcript  = ""
     @Published var liveAmplitude: Float = 0.0
     
-    /// Set by the view when the user manually edits the text field (e.g. deletes text).
-    /// While true, transcript updates are suppressed unless the new transcript is
-    /// substantively longer, preventing stale partial results from overwriting user edits.
-    var userDidEdit = false
-    private var lastPublishedLength = 0
-    
-    private var committedTranscript = ""
-    private var currentFullTranscript = ""
+    private var manualPrefix = ""
 
     /// Fires when a final (or silence-timeout) transcript is committed.
     let onCommit = PassthroughSubject<String, Never>()
@@ -28,34 +21,43 @@ final class VoiceDictationManager: ObservableObject {
     private let audioEngine      = AVAudioEngine()
     private var recognitionTask: SFSpeechRecognitionTask?
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
+    private var currentSessionID = UUID()
 
     // MARK: - Public API
 
-    func toggle() {
-        isListening ? stopListening() : startListening()
+    func toggle(prefix: String = "") {
+        isListening ? stopListening() : startListening(prefix: prefix)
     }
 
-    func startListening() {
+    func startListening(prefix: String = "") {
         guard !isListening else { return }
 
-        // Check authorization
-        let authStatus = SFSpeechRecognizer.authorizationStatus()
-        switch authStatus {
-        case .notDetermined:
+        // Check Speech Recognition authorization
+        let speechStatus = SFSpeechRecognizer.authorizationStatus()
+        
+        // On macOS, we must also explicitly check and request microphone permissions via AVCaptureDevice
+        let micStatus = AVCaptureDevice.authorizationStatus(for: .audio)
+
+        if speechStatus == .notDetermined || micStatus == .notDetermined {
             SFSpeechRecognizer.requestAuthorization { [weak self] status in
-                DispatchQueue.main.async {
-                    if status == .authorized { self?.beginSession() }
+                AVCaptureDevice.requestAccess(for: .audio) { micGranted in
+                    DispatchQueue.main.async {
+                        if status == .authorized && micGranted {
+                            self?.beginSession(prefix: prefix)
+                        } else {
+                            print("Voice dictation requires both Speech Recognition and Microphone permissions.")
+                        }
+                    }
                 }
             }
             return
-        case .authorized:
-            break
-        default:
-            // Denied / restricted — bail silently
-            return
         }
 
-        beginSession()
+        if speechStatus == .authorized && micStatus == .authorized {
+            beginSession(prefix: prefix)
+        } else {
+            print("Voice dictation requires both Speech Recognition and Microphone permissions.")
+        }
     }
 
     func stopListening() {
@@ -76,23 +78,43 @@ final class VoiceDictationManager: ObservableObject {
         }
     }
 
+    func syncManualEdit(to newText: String) {
+        guard isListening else { return }
+        
+        audioEngine.inputNode.removeTap(onBus: 0)
+        recognitionRequest?.endAudio()
+        recognitionTask?.cancel()
+        
+        startRecognitionTask(prefix: newText)
+    }
+
     func markTranscriptCommitted() {
-        committedTranscript = currentFullTranscript
-        transcript = ""
-        lastPublishedLength = 0
-        userDidEdit = false
+        syncManualEdit(to: "")
     }
 
     // MARK: - Session
 
-    private func beginSession() {
+    private func beginSession(prefix: String) {
+        if !audioEngine.isRunning {
+            _ = audioEngine.inputNode // Access inputNode to initialize the engine graph
+            audioEngine.prepare()
+            do {
+                try audioEngine.start()
+            } catch {
+                cleanUp()
+                return
+            }
+        }
+        
+        isListening = true
+        startRecognitionTask(prefix: prefix)
+    }
+    
+    private func startRecognitionTask(prefix: String) {
         guard let recognizer = speechRecognizer, recognizer.isAvailable else { return }
 
-        transcript = ""
-        committedTranscript = ""
-        currentFullTranscript = ""
-        lastPublishedLength = 0
-        userDidEdit = false
+        transcript = prefix
+        manualPrefix = prefix
 
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
@@ -109,12 +131,6 @@ final class VoiceDictationManager: ObservableObject {
             // Fail safely if hardware reports 0 channels to avoid crashes
             return
         }
-
-        // On macOS, the input node must be connected to the main mixer node.
-        // Otherwise, the audio graph may consider the input bus inactive or disconnected,
-        // which causes a kAudioUnitErr_InvalidElement (-10877) when tapped.
-        audioEngine.connect(inputNode, to: audioEngine.mainMixerNode, format: recordingFormat)
-        audioEngine.mainMixerNode.outputVolume = 0.0
 
         inputNode.removeTap(onBus: 0) // Ensure no existing tap is conflicting
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
@@ -149,55 +165,26 @@ final class VoiceDictationManager: ObservableObject {
             }
         }
 
-        audioEngine.prepare()
-        do {
-            try audioEngine.start()
-        } catch {
-            cleanUp()
-            return
-        }
-
-        isListening = true
+        let sessionID = UUID()
+        self.currentSessionID = sessionID
 
         recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
             guard let self else { return }
+            guard self.currentSessionID == sessionID else { return }
 
             if let result {
                 DispatchQueue.main.async {
                     let full = result.bestTranscription.formattedString
-                    self.currentFullTranscript = full
+                    let trimmedNew = full.trimmingCharacters(in: .whitespaces)
                     
-                    var newText = full
-                    if !self.committedTranscript.isEmpty {
-                        if newText.lowercased().hasPrefix(self.committedTranscript.lowercased()) {
-                            newText = String(newText.dropFirst(self.committedTranscript.count))
-                        } else {
-                            let committedWords = self.committedTranscript.split(separator: " ")
-                            let fullWords = full.split(separator: " ")
-                            if fullWords.count > committedWords.count {
-                                newText = fullWords.dropFirst(committedWords.count).joined(separator: " ")
-                            } else {
-                                newText = ""
-                            }
-                        }
-                    }
-                    let trimmed = newText.trimmingCharacters(in: .whitespaces)
-                    
-                    // BUG FIX: If user manually edited (deleted text), only accept
-                    // transcript updates that are genuinely new content (longer than
-                    // what was last published). This prevents stale partial results
-                    // from the recognizer from overwriting user deletions.
-                    if self.userDidEdit {
-                        if trimmed.count > self.lastPublishedLength {
-                            self.userDidEdit = false
-                            self.lastPublishedLength = trimmed.count
-                            self.transcript = trimmed
-                        }
-                        // else: skip this stale update
+                    let combined: String
+                    if self.manualPrefix.isEmpty {
+                        combined = trimmedNew
                     } else {
-                        self.lastPublishedLength = trimmed.count
-                        self.transcript = trimmed
+                        combined = self.manualPrefix + (self.manualPrefix.hasSuffix(" ") || trimmedNew.isEmpty ? "" : " ") + trimmedNew
                     }
+                    
+                    self.transcript = combined
                 }
             }
 
