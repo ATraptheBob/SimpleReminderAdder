@@ -267,7 +267,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
             // ⌘, — settings
             if flags.contains(.command), event.keyCode == 43 {
-                hidePanel(); openSettingsWindow(); return nil
+                openSettingsWindow()
+                return nil
             }
             
             // ⌘Z — undo last saved task
@@ -307,14 +308,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 return event
             }
 
-            // Spacebar in search mode — mark selected as complete
-            if searchModeIsOpen, event.keyCode == 49 {
+            // Shift + Space in search mode — mark selected as complete
+            if searchModeIsOpen, event.keyCode == 49, flags.contains(.shift) {
                 NotificationCenter.default.post(name: .searchCompleteSelected, object: nil)
                 return nil
             }
 
-            // Delete / ⌘⌫ in search mode — delete selected reminder
-            if searchModeIsOpen, event.keyCode == 51 {
+            // Shift + Delete / ⌘⌫ in search mode — delete selected reminder
+            if searchModeIsOpen, event.keyCode == 51, flags.contains(.shift) {
                 NotificationCenter.default.post(name: .searchDeleteSelected, object: nil)
                 return nil
             }
@@ -617,9 +618,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Settings
 
     func openSettingsWindow() {
-        if #available(macOS 14.0, *) { NSApp.activate() }
-        else { NSApp.activate(ignoringOtherApps: true) }
-        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        NotificationCenter.default.post(name: NSNotification.Name("OpenSettingsRequest"), object: nil)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            self.hidePanel()
+        }
     }
 
     // MARK: - Toast

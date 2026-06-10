@@ -182,10 +182,10 @@ struct SearchResultsMenuView: View {
                 // Keyboard hint for selected row
                 if isSelected {
                     HStack(spacing: 3) {
-                        Text("␣")
+                        Text("⇧␣")
                             .font(.system(size: 9, weight: .semibold, design: .monospaced))
                             .foregroundStyle(.tertiary)
-                        Text("⌫")
+                        Text("⇧⌫")
                             .font(.system(size: 9, weight: .semibold, design: .monospaced))
                             .foregroundStyle(.tertiary)
                     }

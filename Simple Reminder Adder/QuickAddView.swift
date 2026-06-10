@@ -70,6 +70,8 @@ private let sharedDateFormatter: DateFormatter = {
 private let searchIndexMaxEntries = 500
 
 struct QuickAddView: View {
+    @Environment(\.openSettings) private var openSettings
+    
     private let eventStore = EKEventStore()
 
     @State private var taskText: String = ""
@@ -176,6 +178,9 @@ struct QuickAddView: View {
                     }
                     .onReceive(NotificationCenter.default.publisher(for: .upArrowRecall)) { _ in
                         handleUpArrowRecall()
+                    }
+                    .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("OpenSettingsRequest"))) { _ in
+                        openSettings()
                     }
                     .onReceive(NotificationCenter.default.publisher(for: .quickAddTabAcceptSuggestion)) { _ in
                         if slashQuery != nil { moveListSelection(delta: 1) }
@@ -386,18 +391,6 @@ struct QuickAddView: View {
         notifySearchModePresence(active: false)
         postMainPanelSearchLayout()
 
-        // Draft recovery: restore saved draft if present
-        if taskText.isEmpty && !savedDraft.isEmpty {
-            taskText = savedDraft
-            savedDraft = ""
-            showDraftRestoredBadge = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                withAnimation(.easeOut(duration: 0.3)) {
-                    showDraftRestoredBadge = false
-                }
-            }
-        }
-
         listPickerLayoutOpenState = listSlashQuery(from: taskText) != nil
         if listPickerLayoutOpenState {
             NotificationCenter.default.post(
@@ -418,8 +411,23 @@ struct QuickAddView: View {
     // MARK: - Up-arrow recall
 
     private func handleUpArrowRecall() {
-        guard !isSearchMode, taskText.isEmpty, !lastAddedText.isEmpty else { return }
-        taskText = lastAddedText
+        guard !isSearchMode, taskText.isEmpty else { return }
+        
+        if !savedDraft.isEmpty {
+            taskText = savedDraft
+            savedDraft = ""
+            showDraftRestoredBadge = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                withAnimation(.easeOut(duration: 0.3)) {
+                    showDraftRestoredBadge = false
+                }
+            }
+        } else if !lastAddedText.isEmpty {
+            taskText = lastAddedText
+        } else {
+            return
+        }
+        
         parseText()
         updateSuggestion()
         postIfChipsChanged()
