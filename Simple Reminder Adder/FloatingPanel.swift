@@ -1,11 +1,12 @@
 import AppKit
 
 class FloatingPanel: NSPanel {
-    init(contentRect: NSRect) {
+    /// - Parameter styleMask: Pass a custom mask for borderless overlays (e.g. chips); default keeps the titled key panel for the quick-add field.
+    init(contentRect: NSRect, styleMask customStyleMask: NSWindow.StyleMask? = nil, movableByBackground: Bool = true) {
+        let mask = customStyleMask ?? [.titled, .fullSizeContentView]
         super.init(
             contentRect: contentRect,
-            // 🚨 FIX: Removed `.nonactivatingPanel` so it can grab the text cursor
-            styleMask: [.titled, .fullSizeContentView],
+            styleMask: mask,
             backing: .buffered,
             defer: false
         )
@@ -15,7 +16,8 @@ class FloatingPanel: NSPanel {
         self.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         self.titleVisibility = .hidden
         self.titlebarAppearsTransparent = true
-        self.isMovableByWindowBackground = true
+        self.isMovableByWindowBackground = movableByBackground
+        self.isMovable = mask.contains(.titled) ? true : movableByBackground
         self.backgroundColor = .clear
         self.isOpaque = false
     }

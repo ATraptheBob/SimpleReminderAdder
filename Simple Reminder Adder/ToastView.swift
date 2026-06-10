@@ -8,7 +8,7 @@ struct ToastView: View {
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: "checkmark.circle.fill")
-                .foregroundColor(Color(hue: 0.38, saturation: 0.45, brightness: 0.78))
+                .foregroundColor(Color(hue: 0.36, saturation: 0.32, brightness: 0.72))
                 .font(.system(size: 14, weight: .medium))
 
             Text(title)
@@ -20,14 +20,14 @@ struct ToastView: View {
             pill(
                 icon: "list.bullet",
                 label: list,
-                color: Color(hue: 0.75, saturation: 0.35, brightness: 0.80)
+                color: PanelChrome.listAccent
             )
 
             if let dateStr {
                 pill(
                     icon: "clock",
                     label: dateStr,
-                    color: Color(hue: 0.08, saturation: 0.55, brightness: 0.85)
+                    color: PanelChrome.dateTime
                 )
             }
         }
@@ -38,7 +38,7 @@ struct ToastView: View {
         .clipShape(Capsule())
         .overlay(
             Capsule()
-                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                .stroke(PanelChrome.strokeSubtle, lineWidth: 1)
         )
     }
 
@@ -58,7 +58,7 @@ struct ToastView: View {
             Capsule().fill(Color.primary.opacity(0.04))
         )
         .overlay(
-            Capsule().stroke(color.opacity(0.20), lineWidth: 1)
+            Capsule().stroke(color.opacity(0.18), lineWidth: 1)
         )
     }
 }
