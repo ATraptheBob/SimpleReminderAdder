@@ -1083,6 +1083,8 @@ struct QuickAddView: View {
         if let s = parsedRecurrenceString { cleanTitle = cleanTitle.replacingOccurrences(of: s, with: "", options: .caseInsensitive) }
         if let s = parsedLocationString   { cleanTitle = cleanTitle.replacingOccurrences(of: s, with: "", options: .caseInsensitive) }
         cleanTitle = cleanTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        // SECURITY ENHANCEMENT: Strip control/formatting characters to prevent UI spoofing
+        cleanTitle = cleanTitle.replacingOccurrences(of: "\\p{Cc}", with: "", options: .regularExpression)
         if cleanTitle.isEmpty { cleanTitle = "New Task" }
 
         let dest     = parsedList ?? eventStore.defaultCalendarForNewReminders()
@@ -1323,7 +1325,7 @@ struct QuickAddView: View {
                     self.lists = eventStore.calendars(for: .reminder)
                     self.precompileListRegexes(for: self.lists)
                 }
-            } catch { print("Permission error: \(error)") }
+            } catch { print("Permission error: Failed to acquire reminders access.") }
         }
     }
 
