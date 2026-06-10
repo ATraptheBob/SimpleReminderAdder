@@ -720,7 +720,8 @@ struct QuickAddView: View {
         else if taskText.hasPrefix("!")   { parsedPriority = 9; parsedPriorityString = "!" }
 
         for list in lists {
-            let pattern = "(?i)\\b(?:in|to)\\s+\\Q\(list.title)\\E\\b"
+            let escapedListTitle = NSRegularExpression.escapedPattern(for: list.title)
+            let pattern = "(?i)\\b(?:in|to)\\s+\(escapedListTitle)\\b"
             if let range = taskText.range(of: pattern, options: .regularExpression) {
                 parsedList       = list
                 parsedListString = String(taskText[range])
