@@ -75,6 +75,8 @@ struct ChipsView: View {
                 label: priorityLabel(for: displayPriority),
                 glow: false
             )
+            .accessibilityAddTraits(.isButton)
+            .accessibilityHint("Double tap to expand or collapse priority slider")
             .onTapGesture {
                 withAnimation(.spring(response: 0.15, dampingFraction: 0.82)) {
                     overlay.priorityExpanded.toggle()
@@ -152,6 +154,8 @@ struct ChipsView: View {
                 .lineLimit(1)
         }
         .foregroundColor(color.opacity(glow ? 1.0 : 0.85))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(kind.rawValue.capitalized): \(label)")
         .fixedSize()
         .padding(.horizontal, 11)
         .padding(.vertical, 6)
