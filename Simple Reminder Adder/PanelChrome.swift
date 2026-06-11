@@ -30,11 +30,11 @@ enum PanelChrome {
         case .system:
             return .accentColor
         case .midnightObsidian:
-            return Color(hue: 0.70, saturation: 0.15, brightness: 0.65)
+            return Color(hue: 0.70, saturation: 0.15, brightness: 0.75)
         case .frostGlass:
-            return Color(hue: 0.55, saturation: 0.45, brightness: 0.90)
+            return Color(hue: 0.55, saturation: 0.50, brightness: 0.90)
         case .deepForest:
-            return Color(hue: 0.40, saturation: 0.35, brightness: 0.70)
+            return Color(hue: 0.40, saturation: 0.35, brightness: 0.80)
         case .classicOrange:
             return Color.orange
         }

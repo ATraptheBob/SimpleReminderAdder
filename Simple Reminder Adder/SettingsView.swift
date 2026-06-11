@@ -22,7 +22,7 @@ struct SettingsView: View {
     @AppStorage("timeNightMinute") private var nightMinute: Int = 0
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: .leading, spacing: 6) {
             // Header
             Text("Preferences")
                 .font(.system(size: 15, weight: .semibold, design: .rounded))
@@ -166,6 +166,9 @@ struct SettingsView: View {
             )
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("Dictation Hotkey Recorder")
+        .accessibilityValue(isRecordingHotkey ? "Recording" : dictationHotkey)
+        .accessibilityHint("Tap to record a new hotkey for dictation")
         .onAppear {
             NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
                 guard isRecordingHotkey else { return event }

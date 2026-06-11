@@ -734,6 +734,21 @@ struct QuickAddView: View {
             // Hide trailing controls in idle mode
             if !isIdleMode {
                 HStack(spacing: 6) {
+                    Button {
+                        handleDictationToggle()
+                    } label: {
+                        Image(systemName: dictation.isListening ? "mic.fill" : "mic")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(dictation.isListening ? Color.red.opacity(0.8) : .secondary.opacity(0.5))
+                            .frame(width: 24, height: 24)
+                            .background(
+                                Circle()
+                                    .fill(dictation.isListening ? Color.red.opacity(0.1) : Color.clear)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(dictation.isListening ? "Stop Voice Dictation" : "Start Voice Dictation")
+
                     if dripSessionCount > 0 {
                         HStack(spacing: 3) {
                             ForEach(0..<min(dripSessionCount, 6), id: \.self) { _ in
