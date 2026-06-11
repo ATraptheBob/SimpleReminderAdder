@@ -156,7 +156,6 @@ struct QuickAddView: View {
     @State private var taskText: String = ""
     @FocusState private var isInputFocused: Bool
     @State private var previousTaskTextLength: Int = 0
-    @State private var isDictationUpdate: Bool = false
     @State private var lists: [EKCalendar] = []
     @State private var listRegexCache: [(EKCalendar, NSRegularExpression)] = []
 
@@ -252,10 +251,10 @@ struct QuickAddView: View {
     var body: some View {
         let step1 = mainContent
             .onChange(of: taskText) { _, new in
-                if isDictationUpdate {
-                    isDictationUpdate = false
-                } else if dictation.isListening {
-                    dictation.syncManualEdit(to: new)
+                if dictation.isListening {
+                    if new != dictation.transcript {
+                        dictation.syncManualEdit(to: new)
+                    }
                 }
                 previousTaskTextLength = new.count
                 handleTaskTextChange(new)
@@ -405,7 +404,6 @@ struct QuickAddView: View {
             .onReceive(dictation.$transcript) { text in
                 guard dictation.isListening, !text.isEmpty else { return }
                 previousTaskTextLength = text.count
-                isDictationUpdate = true
                 taskText = text
             }
         
