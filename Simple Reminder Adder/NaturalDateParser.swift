@@ -504,8 +504,9 @@ enum NaturalDateParser {
         let wordsBefore = textBefore.components(separatedBy: .whitespaces)
         if let lastWord = wordsBefore.last(where: { !$0.isEmpty })?.lowercased(),
            ["at", "on", "by", "for", "due", "until", "before"].contains(lastWord) {
-            let escaped = NSRegularExpression.escapedPattern(for: finalDateString)
-            let searchPattern = "(?i)\\b\(lastWord)\\s+\(escaped)"
+            let escapedDate = NSRegularExpression.escapedPattern(for: finalDateString)
+            let escapedLastWord = NSRegularExpression.escapedPattern(for: lastWord)
+            let searchPattern = "(?i)\\b\(escapedLastWord)\\s+\(escapedDate)"
             if let fullRange = text.range(of: searchPattern, options: .regularExpression) {
                 finalDateString = String(text[fullRange])
             }
