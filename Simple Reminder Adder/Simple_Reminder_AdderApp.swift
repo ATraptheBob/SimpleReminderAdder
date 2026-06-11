@@ -175,7 +175,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             let textWidth = note.userInfo?["textWidth"] as? CGFloat ?? 0
             self.currentTextWidth = textWidth
-            self.resizePanelForText(textWidth: textWidth)
+            self.resizePanelForText(textWidth: textWidth, oldIdleMode: self.isIdleMode, oldTabVisible: self.isTabVisible)
         }
 
         NotificationCenter.default.addObserver(
@@ -184,8 +184,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         ) { [weak self] note in
             guard let self else { return }
             let isIdle = note.userInfo?["isIdle"] as? Bool ?? true
+            let oldIdleMode = self.isIdleMode
             self.isIdleMode = isIdle
-            self.resizePanelForText(textWidth: self.currentTextWidth)
+            self.resizePanelForText(textWidth: self.currentTextWidth, oldIdleMode: oldIdleMode, oldTabVisible: self.isTabVisible)
         }
 
         NotificationCenter.default.addObserver(
@@ -194,8 +195,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         ) { [weak self] note in
             guard let self else { return }
             let visible = note.userInfo?["visible"] as? Bool ?? false
+            let oldTabVisible = self.isTabVisible
             self.isTabVisible = visible
-            self.resizePanelForText(textWidth: self.currentTextWidth)
+            self.resizePanelForText(textWidth: self.currentTextWidth, oldIdleMode: self.isIdleMode, oldTabVisible: oldTabVisible)
         }
 
         showPanel()
@@ -219,7 +221,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         else { NSApp.activate(ignoringOtherApps: true) }
 
         chipsPanel?.alphaValue = 1
-        panel.center()
+        if let screen = NSScreen.main {
+            let sf = screen.visibleFrame
+            let newTabH: CGFloat = self.isTabVisible ? tabHeight : 0
+            let newInputBarH: CGFloat = self.isIdleMode ? idleHeight : mainPanelCollapsedHeight
+            let centerY_in_window = newTabH + newInputBarH / 2.0
+            
+            let x = sf.midX - panel.frame.width / 2
+            let y = sf.midY - centerY_in_window
+            panel.setFrameOrigin(NSPoint(x: x, y: y))
+        } else {
+            panel.center()
+        }
         panel.makeKeyAndOrderFront(nil)
         panel.alphaValue = 0
         PanelMotionBlur.setRadius(12, on: panel.contentView)
@@ -391,6 +404,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    func applicationDidResignActive(_ notification: Notification) {
+        hidePanel()
+    }
+
     func hidePanel() {
         if mainPanelUsesSearchExpansion { resizeMainPanelForSearchLayout(open: false, auxiliaryHeight: 0) }
         NotificationCenter.default.post(name: .forceExitSearchMode, object: nil)
@@ -505,17 +522,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let oldIdleMode = self.isIdleMode
         let oldTabVisible = self.isTabVisible
         mainPanelUsesSearchExpansion = false
-        let baseH = open ? mainPanelListPickerExpandedHeight : (isIdleMode ? idleHeight : mainPanelCollapsedHeight)
+        
+        let initialW = open ? maxPanelWidth : (isIdleMode ? idleWidth : min(maxPanelWidth, max(minExpandedWidth, currentTextWidth + 80)))
+        
+        var newIdleMode = oldIdleMode
+        if open && newIdleMode {
+            newIdleMode = false
+        } else if !open && initialW == idleWidth && !newIdleMode {
+            newIdleMode = true
+        }
+        self.isIdleMode = newIdleMode
+        
+        let baseH = open ? mainPanelListPickerExpandedHeight : (newIdleMode ? idleHeight : mainPanelCollapsedHeight)
         let newH = baseH + (isTabVisible ? tabHeight : 0)
-        let newW = open ? maxPanelWidth : (isIdleMode ? idleWidth : min(maxPanelWidth, max(minExpandedWidth, currentTextWidth + 80)))
+        let newW = open ? maxPanelWidth : (newIdleMode ? idleWidth : min(maxPanelWidth, max(minExpandedWidth, currentTextWidth + 80)))
         
         updatePanelFrame(targetW: newW, targetH: newH, oldIdleMode: oldIdleMode, oldTabVisible: oldTabVisible)
-        
-        if open && isIdleMode {
-            isIdleMode = false
-        } else if !open && newW == idleWidth && !isIdleMode {
-            isIdleMode = true
-        }
     }
 
     private func resizeMainPanelForSearchLayout(open: Bool, auxiliaryHeight: CGFloat) {
@@ -536,10 +558,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         updatePanelFrame(targetW: targetW, targetH: targetH, oldIdleMode: oldIdleMode, oldTabVisible: oldTabVisible)
     }
     
-    private func resizePanelForText(textWidth: CGFloat) {
+    private func resizePanelForText(textWidth: CGFloat, oldIdleMode: Bool, oldTabVisible: Bool) {
         guard !searchModeIsOpen && !listPickerIsOpen else { return }
-        let oldIdleMode = self.isIdleMode
-        let oldTabVisible = self.isTabVisible
         
         let targetWidth = isIdleMode ? idleWidth : min(maxPanelWidth, max(minExpandedWidth, textWidth + 80))
         let baseHeight = isIdleMode ? idleHeight : mainPanelCollapsedHeight

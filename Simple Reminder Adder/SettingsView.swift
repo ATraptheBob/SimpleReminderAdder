@@ -1,9 +1,11 @@
 import SwiftUI
 import KeyboardShortcuts
+import ServiceManagement
 
 struct SettingsView: View {
     @AppStorage("appTheme") private var selectedTheme: AppTheme = .system
     @AppStorage("keepPanelOpen") private var keepPanelOpen: Bool = false
+    @State private var launchAtLogin: Bool = SMAppService.mainApp.status == .enabled
 
     // Dictation hotkey — stored as a single character string (e.g. "d")
     @AppStorage("dictationHotkey") private var dictationHotkey: String = "d"
@@ -76,6 +78,31 @@ struct SettingsView: View {
             }
             .toggleStyle(.switch)
             .padding(.vertical, 4)
+
+            Toggle(isOn: $launchAtLogin) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Launch on login")
+                        .font(.system(size: 13, weight: .medium))
+                    Text("Automatically start Simple Reminder Adder when you log in.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .toggleStyle(.switch)
+            .padding(.vertical, 4)
+            .onChange(of: launchAtLogin) { oldValue, newValue in
+                do {
+                    if newValue {
+                        if SMAppService.mainApp.status != .enabled {
+                            try SMAppService.mainApp.register()
+                        }
+                    } else {
+                        try SMAppService.mainApp.unregister()
+                    }
+                } catch {
+                    print("Failed to toggle launch at login: \(error)")
+                }
+            }
 
             Divider().padding(.vertical, 10)
 

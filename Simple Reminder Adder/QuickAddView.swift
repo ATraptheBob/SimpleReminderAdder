@@ -337,9 +337,13 @@ struct QuickAddView: View {
                     return
                 }
                 if isSearchMode {
+                    isInputFocused = false
                     isSearchMode = false
-                    taskText = ""
-                    isInputFocused = true
+                    taskText = composeDraft
+                    composeDraft = ""
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                        self.isInputFocused = true
+                    }
                     return
                 }
                 if let currentSlash = slashQuery {
@@ -427,7 +431,7 @@ struct QuickAddView: View {
                     .transition(
                         .asymmetric(
                             insertion: .opacity.combined(with: .offset(y: 8)),
-                            removal:   .opacity.combined(with: .offset(y: 8))
+                            removal:   .opacity.animation(.easeOut(duration: 0.08))
                         )
                     )
             }
@@ -444,7 +448,7 @@ struct QuickAddView: View {
                 .transition(
                     .asymmetric(
                         insertion: .opacity.combined(with: .offset(y: 8)),
-                        removal:   .opacity.combined(with: .offset(y: 8))
+                        removal:   .opacity.animation(.easeOut(duration: 0.08))
                     )
                 )
             }
@@ -454,7 +458,7 @@ struct QuickAddView: View {
             if isTabVisible {
                 waveformTab
                     .frame(height: 32)
-                    .transition(.opacity)
+                    .transition(.asymmetric(insertion: .opacity, removal: .opacity.animation(.easeOut(duration: 0.08))))
             }
         }
         .frame(maxWidth: .infinity, alignment: .bottom) // Bottom alignment is important for upward expansion
@@ -464,9 +468,9 @@ struct QuickAddView: View {
             BubbleShape(cornerRadius: effectiveCornerRadius, tabProgress: isTabVisible ? 1.0 : 0.0)
                 .stroke(PanelChrome.strokeSubtle, lineWidth: 1)
         )
-        .animation(.spring(response: 0.3, dampingFraction: 0.85), value: effectiveCornerRadius)
-        .animation(.spring(response: 0.25, dampingFraction: 0.8), value: isTabVisible)
-        .animation(.spring(response: 0.25, dampingFraction: 0.8), value: isIdleMode)
+        .animation(.timingCurve(0.16, 1.0, 0.3, 1.0, duration: 0.28), value: effectiveCornerRadius)
+        .animation(.timingCurve(0.16, 1.0, 0.3, 1.0, duration: 0.28), value: isTabVisible)
+        .animation(.timingCurve(0.16, 1.0, 0.3, 1.0, duration: 0.28), value: isIdleMode)
         .onChange(of: isTabVisible) { _, newValue in
             NotificationCenter.default.post(
                 name: .waveformTabVisibilityChanged,
@@ -676,12 +680,13 @@ struct QuickAddView: View {
                 .tint(.primary.opacity(0.6))
                 .lineLimit(1)
                 .focused($isInputFocused)
+                .id(isSearchMode ? "search" : "compose")
                 .onSubmit {
                     if !isSearchMode { saveTask(keepPanelOpen: keepPanelOpenSetting) }
                 }
                 .padding(.horizontal, 22)
-                .accessibilityLabel("New reminder")
-                .accessibilityHint("Type your reminder and press Return to save")
+                .accessibilityLabel(isSearchMode ? "Search reminders" : "New reminder")
+                .accessibilityHint(isSearchMode ? "Type to search" : "Type your reminder and press Return to save")
 
             // Save-success flash overlay
             if saveFlashActive {
@@ -1185,6 +1190,7 @@ struct QuickAddView: View {
     // MARK: - Search (⌘F)
 
     private func toggleSearchModeFromHotkey() {
+        isInputFocused = false
         if isSearchMode {
             withAnimation(.spring(response: 0.22, dampingFraction: 0.86)) {
                 isSearchMode = false
@@ -1202,6 +1208,10 @@ struct QuickAddView: View {
         parseText()
         updateSuggestion()
         postIfChipsChanged()
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            self.isInputFocused = true
+        }
     }
 
     private func notifySearchModePresence(active: Bool) {

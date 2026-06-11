@@ -81,11 +81,10 @@ final class VoiceDictationManager: ObservableObject {
     func syncManualEdit(to newText: String) {
         guard isListening else { return }
         
-        audioEngine.inputNode.removeTap(onBus: 0)
         recognitionRequest?.endAudio()
         recognitionTask?.cancel()
         
-        startRecognitionTask(prefix: newText)
+        startRecognitionTask(prefix: newText, installTap: false)
     }
 
     func markTranscriptCommitted() {
@@ -95,8 +94,12 @@ final class VoiceDictationManager: ObservableObject {
     // MARK: - Session
 
     private func beginSession(prefix: String) {
+        isListening = true
+        
+        // Setup recognition request and tap (if needed) before starting the engine
+        startRecognitionTask(prefix: prefix, installTap: !audioEngine.isRunning)
+        
         if !audioEngine.isRunning {
-            _ = audioEngine.inputNode // Access inputNode to initialize the engine graph
             audioEngine.prepare()
             do {
                 try audioEngine.start()
@@ -105,12 +108,9 @@ final class VoiceDictationManager: ObservableObject {
                 return
             }
         }
-        
-        isListening = true
-        startRecognitionTask(prefix: prefix)
     }
     
-    private func startRecognitionTask(prefix: String) {
+    private func startRecognitionTask(prefix: String, installTap: Bool) {
         guard let recognizer = speechRecognizer, recognizer.isAvailable else { return }
 
         transcript = prefix
@@ -125,17 +125,19 @@ final class VoiceDictationManager: ObservableObject {
         recognitionRequest = request
 
         let inputNode = audioEngine.inputNode
-        let recordingFormat = inputNode.outputFormat(forBus: 0)
         
-        guard recordingFormat.channelCount > 0 else {
-            // Fail safely if hardware reports 0 channels to avoid crashes
-            return
-        }
+        if installTap {
+            let recordingFormat = inputNode.outputFormat(forBus: 0)
+            
+            guard recordingFormat.channelCount > 0, recordingFormat.sampleRate > 0 else {
+                // Fail safely if hardware reports invalid format to avoid crashes or -10877 errors
+                return
+            }
 
-        inputNode.removeTap(onBus: 0) // Ensure no existing tap is conflicting
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
-            guard let self else { return }
-            self.recognitionRequest?.append(buffer)
+            inputNode.removeTap(onBus: 0) // Ensure no existing tap is conflicting
+            inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
+                guard let self else { return }
+                self.recognitionRequest?.append(buffer)
             
             // Calculate Root Mean Square (RMS) of buffer for live visualization
             let frameCount = Int(buffer.frameLength)
@@ -163,6 +165,7 @@ final class VoiceDictationManager: ObservableObject {
             DispatchQueue.main.async {
                 self.liveAmplitude = min(1.0, max(0.0, rms * 40.0))
             }
+        }
         }
 
         let sessionID = UUID()
