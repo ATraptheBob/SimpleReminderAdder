@@ -13,3 +13,8 @@
 **Vulnerability:** The application was allowing arbitrary control and formatting characters (`\p{Cc}`) to be saved into the `EKReminder` titles. This can lead to UI spoofing (e.g., using Right-to-Left Overrides) or unexpected application behavior when these characters are rendered in standard system UIs like the Reminders app.
 **Learning:** Even when inputs are constrained in length, their content must be sanitized for control characters to ensure safe rendering.
 **Prevention:** Apply a regular expression replacement (e.g. `replacingOccurrences(of: "\\p{Cc}", with: "", options: .regularExpression)`) to strip potentially malicious invisible characters before persisting user text.
+
+## 2024-06-12 - [Regex Injection Risk from Unescaped Keyword]
+**Vulnerability:** In `NaturalDateParser.swift`, a variable `lastWord` dynamically parsed from user input was inserted unescaped into a regular expression: `"(?i)\\b\(lastWord)\\s+\(escaped)"`.
+**Learning:** Although `lastWord` was constrained by an array check `["at", "on", ...]`, failing to escape dynamic input when interpolating it into regex strings is a bad practice. If the allowed list is ever modified to include regex-meaningful characters, it opens the app up to Regex Injection or ReDoS.
+**Prevention:** Always wrap dynamically interpolated strings inside regular expressions with `NSRegularExpression.escapedPattern(for:)`, regardless of current constraints.
