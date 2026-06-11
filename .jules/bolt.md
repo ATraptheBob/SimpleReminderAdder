@@ -7,3 +7,6 @@
 ## 2024-10-25 - Caching NSDataDetector
 **Learning:** `NSDataDetector` is a subclass of `NSRegularExpression` and its initialization is equally computationally expensive. Initializing it inside a frequently invoked function (like a parser running on every keystroke) creates a significant CPU overhead.
 **Action:** Always cache instances of `NSDataDetector` as a thread-safe `static let` property if they are going to be used repeatedly.
+## 2024-11-20 - Manual scalar math on realtime audio threads
+**Learning:** Calculating statistics like Root Mean Square (RMS) using manual `for` loops in Swift on a realtime audio thread introduces unnecessary latency due to scalar computation over large arrays.
+**Action:** Replace manual loops over audio buffers (like `floatChannelData`) with vectorized `Accelerate` functions (such as `vDSP_rmsqv`) to drastically reduce CPU overhead during realtime processing.
