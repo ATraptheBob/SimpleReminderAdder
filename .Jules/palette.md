@@ -9,3 +9,7 @@
 ## 2026-11-20 - Invisible interactive components
 **Learning:** Found that the hotkey recorder in SettingsView and dictation trigger relied on visual context or keyboard shortcuts alone. Screen readers would encounter them as static text or unlabeled actions, leaving users confused about how to interact with the recording state.
 **Action:** Always provide `.accessibilityLabel`, dynamic `.accessibilityValue`, and `.accessibilityHint` for custom interactive state buttons, and ensure icon-only buttons (like a Dictation Mic) have explicit labels.
+
+## 2024-05-12 - Missing context on custom list buttons
+**Learning:** Found that custom SwiftUI lists built using `LazyVStack` and `Button` components in `ListPickerView` and `SearchResultsStripView` lacked screen reader context. VoiceOver would read the raw text without clarifying the action the button performs.
+**Action:** When wrapping rows in a `Button` in a custom list, always provide an explicit `.accessibilityLabel` that combines the action with the text content (e.g., "Select list: ") and an `.accessibilityHint` to clarify the action.

@@ -195,6 +195,8 @@ struct SearchResultsMenuView: View {
                 }
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Select reminder: \(hit.title)")
+            .accessibilityHint("Double tap to activate this reminder")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
