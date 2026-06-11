@@ -146,6 +146,39 @@ enum NaturalDateParser {
     // and this parser is called repeatedly on every keystroke.
     private static let sharedDateDetector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.date.rawValue)
 
+    // ⚡ Bolt: Pre-compile regexes for parseDetector and looksLikeBareClockTime
+    // because constructing NSRegularExpression repeatedly is slow.
+    private static let bareClockTimeRegex = try! NSRegularExpression(
+        pattern: #"^\d{1,2}\s*(:\d{2})?\s*(am|pm|a\.m\.|p\.m\.)?$"#,
+        options: [.caseInsensitive]
+    )
+    private static let timeWithPeriodRegex = try! NSRegularExpression(
+        pattern: #"\d{1,2}\s*(:\d{2})?\s*(am|pm|a\.m\.|p\.m\.)"#,
+        options: [.caseInsensitive]
+    )
+    private static let atSymbolTimeRegex = try! NSRegularExpression(
+        pattern: #"\b(at|@)\s*\d"#,
+        options: [.caseInsensitive]
+    )
+    private static let monthsAndDaysShortRegex = try! NSRegularExpression(
+        pattern: #"mon|tue|wed|thu|fri|sat|sun|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec"#,
+        options: []
+    )
+
+    // Regexes for hasExplicitCalendarDay
+    private static let weekdaysRegex = try! NSRegularExpression(
+        pattern: #"mon(day)?|tue(sday)?|wed(nesday)?|thu(rsday)?|fri(day)?|sat(urday)?|sun(day)?"#,
+        options: []
+    )
+    private static let dateNumericRegex = try! NSRegularExpression(
+        pattern: #"\d{1,2}[/\-]\d{1,2}([/\-]\d{2,4})?"#,
+        options: []
+    )
+    private static let monthsShortRegex = try! NSRegularExpression(
+        pattern: #"jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec"#,
+        options: []
+    )
+
     // Relative-time patterns — pre-compiled
     private struct FuzzyPattern {
         let regex: NSRegularExpression
@@ -513,10 +546,12 @@ enum NaturalDateParser {
 
         let dc = Calendar.current.dateComponents([.hour, .minute], from: date)
         let hasNonZeroClock = (dc.hour ?? 0) != 0 || (dc.minute ?? 0) != 0
+        let finalNs = finalDateString as NSString
+        let fullFinal = NSRange(location: 0, length: finalNs.length)
         let hasTime = match.timeZone != nil
             || hasNonZeroClock
-            || finalDateString.range(of: #"\d{1,2}\s*(:\d{2})?\s*(am|pm|a\.m\.|p\.m\.)"#, options: [.regularExpression, .caseInsensitive]) != nil
-            || finalDateString.range(of: #"\b(at|@)\s*\d"#, options: [.regularExpression, .caseInsensitive]) != nil
+            || timeWithPeriodRegex.firstMatch(in: finalDateString, range: fullFinal) != nil
+            || atSymbolTimeRegex.firstMatch(in: finalDateString, range: fullFinal) != nil
 
         let explicitCal = hasExplicitCalendarDay(in: finalDateString)
         let hasDateComponent = explicitCal || !looksLikeBareClockTime(finalDateString)
@@ -535,8 +570,11 @@ enum NaturalDateParser {
         if t.contains("tomorrow") || t.contains("today") || t.contains("next ") { return false }
         if t.contains("tonight") || t.contains("this evening") || t.contains("this morning") || t.contains("this afternoon") { return false }
         if t.contains("eod") || t.contains("noon") || t.contains("midnight") || t.contains("midday") { return false }
-        if t.range(of: #"mon|tue|wed|thu|fri|sat|sun|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec"#, options: .regularExpression) != nil { return false }
-        return t.range(of: #"^\d{1,2}\s*(:\d{2})?\s*(am|pm|a\.m\.|p\.m\.)?$"#, options: [.regularExpression, .caseInsensitive]) != nil
+
+        let ns = t as NSString
+        let full = NSRange(location: 0, length: ns.length)
+        if monthsAndDaysShortRegex.firstMatch(in: t, range: full) != nil { return false }
+        return bareClockTimeRegex.firstMatch(in: t, range: full) != nil
     }
 
     private static func hasExplicitCalendarDay(in s: String) -> Bool {
@@ -546,9 +584,12 @@ enum NaturalDateParser {
         if t.contains("tomorrow") || t.contains("day after tomorrow") { return true }
         if t.contains("eod") || t.contains("end of day") || t.contains("cob") || t.contains("close of business") { return true }
         if t.contains("noon") || t.contains("midday") || t.contains("midnight") { return true }
-        if t.range(of: #"mon(day)?|tue(sday)?|wed(nesday)?|thu(rsday)?|fri(day)?|sat(urday)?|sun(day)?"#, options: .regularExpression) != nil { return true }
-        if t.range(of: #"\d{1,2}[/\-]\d{1,2}([/\-]\d{2,4})?"#, options: .regularExpression) != nil { return true }
-        if t.range(of: #"jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec"#, options: .regularExpression) != nil { return true }
+
+        let ns = t as NSString
+        let full = NSRange(location: 0, length: ns.length)
+        if weekdaysRegex.firstMatch(in: t, range: full) != nil { return true }
+        if dateNumericRegex.firstMatch(in: t, range: full) != nil { return true }
+        if monthsShortRegex.firstMatch(in: t, range: full) != nil { return true }
         return false
     }
 
