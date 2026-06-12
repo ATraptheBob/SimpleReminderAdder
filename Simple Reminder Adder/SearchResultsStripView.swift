@@ -195,6 +195,16 @@ struct SearchResultsMenuView: View {
                 }
             }
             .buttonStyle(.plain)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel({
+                let base = hit.title
+                let isOverdue = hit.dueDate.map { $0 < Date() } ?? false
+                let overdueText = (isOverdue && !isCompleted) ? ", overdue" : ""
+                let subtitleText = hit.subtitle.isEmpty ? "" : ", \(hit.subtitle)"
+                return "\(base)\(subtitleText)\(overdueText)"
+            }())
+            .accessibilityHint("Double tap to open this reminder")
+            .accessibilityAddTraits(isSelected ? .isSelected : [])
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
