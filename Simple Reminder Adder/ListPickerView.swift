@@ -59,5 +59,9 @@ struct ListPickerView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(title)
+        .accessibilityHint("Double tap to select this list")
+        .accessibilityAddTraits(isOn ? .isSelected : [])
     }
 }
