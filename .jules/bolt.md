@@ -7,3 +7,6 @@
 ## 2024-10-25 - Caching NSDataDetector
 **Learning:** `NSDataDetector` is a subclass of `NSRegularExpression` and its initialization is equally computationally expensive. Initializing it inside a frequently invoked function (like a parser running on every keystroke) creates a significant CPU overhead.
 **Action:** Always cache instances of `NSDataDetector` as a thread-safe `static let` property if they are going to be used repeatedly.
+## 2024-11-06 - Optimizing RMS calculation on real-time audio thread
+**Learning:** Manually iterating through audio buffer arrays (e.g., calculating Root Mean Square via a `for` loop) on a real-time audio thread is a performance bottleneck.
+**Action:** Use the `Accelerate` framework's vector functions (e.g., `vDSP_rmsqv`) for highly optimized, vectorized mathematical operations instead, providing a massive constant-factor speedup.
