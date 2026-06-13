@@ -1270,24 +1270,24 @@ struct QuickAddView: View {
             eventStore.fetchReminders(matching: predicate) { reminders in
                 let rows = (reminders ?? [])
                     .filter { !$0.isCompleted }
+                    // PERF: Cache dueDate to avoid expensive Calendar.current.date(from:) calls during sorting
+                    .map { ($0, self.dueDate(for: $0)) }
                     .sorted { lhs, rhs in
                         // Sort before limiting so we keep the most relevant entries
-                        let ld = self.dueDate(for: lhs)
-                        let rd = self.dueDate(for: rhs)
-                        switch (ld, rd) {
+                        switch (lhs.1, rhs.1) {
                         case let (l?, r?): return l < r
                         case (_?, nil): return true
                         case (nil, _?): return false
                         // BUG FIX: guard against nil titles to prevent crash
-                        case (nil, nil): return (lhs.title ?? "").localizedCaseInsensitiveCompare(rhs.title ?? "") == .orderedAscending
+                        case (nil, nil): return (lhs.0.title ?? "").localizedCaseInsensitiveCompare(rhs.0.title ?? "") == .orderedAscending
                         }
                     }
                     // PERF: limit to searchIndexMaxEntries to prevent unbounded memory
                     .prefix(searchIndexMaxEntries)
-                    .map { reminder -> SearchIndexRow in
+                    .map { tuple -> SearchIndexRow in
+                        let (reminder, dueDate) = tuple
                         let title = reminder.title ?? ""
-                        let subtitle = self.reminderSubtitle(for: reminder)
-                        let dueDate = self.dueDate(for: reminder)
+                        let subtitle = self.reminderSubtitle(for: reminder, dueDate: dueDate)
                         return SearchIndexRow(
                             id: reminder.calendarItemIdentifier,
                             title: title,
@@ -1331,9 +1331,10 @@ struct QuickAddView: View {
     }
 
     // BUG FIX: use cached DateFormatter instead of creating one per row
-    private func reminderSubtitle(for reminder: EKReminder) -> String {
+    // PERF: accept cached dueDate instead of calling dueDate(for:) again
+    private func reminderSubtitle(for reminder: EKReminder, dueDate: Date?) -> String {
         let list = reminder.calendar?.title ?? ""
-        if let date = dueDate(for: reminder) {
+        if let date = dueDate {
             return [list, sharedDateFormatter.string(from: date)].filter { !$0.isEmpty }.joined(separator: " · ")
         }
         return list
