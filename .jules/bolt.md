@@ -10,6 +10,6 @@
 ## 2024-11-20 - Manual scalar math on realtime audio threads
 **Learning:** Calculating statistics like Root Mean Square (RMS) using manual `for` loops in Swift on a realtime audio thread introduces unnecessary latency due to scalar computation over large arrays.
 **Action:** Replace manual loops over audio buffers (like `floatChannelData`) with vectorized `Accelerate` functions (such as `vDSP_rmsqv`) to drastically reduce CPU overhead during realtime processing.
-## 2026-06-13 - Audio Thread Vectorization using Reusable Buffers
-**Learning:** Initializing new arrays (e.g. via `.map`) inside high-frequency, real-time audio threads like AVAudioEngine callbacks causes dynamic heap allocation, which results in devastating priority inversion and audio dropouts. Using Accelerate requires careful state management to ensure safety.
-**Action:** Always pre-allocate fixed or lazily-growing buffers (e.g. as class properties) to pass safely to `vDSP` scaling functions (`vDSP_vflt16`, `vDSP_vsdiv`) without triggering heap allocations per frame.
+## 2026-06-13 - Avoid double-dispatch on the Main thread
+**Learning:** Wrapping a `continuation.resume` call in `DispatchQueue.main.async` when the continuation will already naturally resume onto the `@MainActor` causes an unnecessary double-dispatch, leading to delayed execution and potential frame drops.
+**Action:** Resume continuations directly if the caller handles actor context, or ensure you only explicitly dispatch to the main queue when strictly necessary, to avoid redundant scheduling overhead.

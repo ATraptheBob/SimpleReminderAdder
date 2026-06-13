@@ -411,7 +411,7 @@ enum NaturalDateParser {
         var dc = DateComponents()
         dc.hour = hour
         dc.minute = minute
-        let d = cal.date(byAdding: dc, to: tomorrow)
+        let d = cal.date(byAdding: dc, to: cal.startOfDay(for: tomorrow))
         return NaturalDateParseResult(date: d, matchedSubstring: nil, hasDateComponent: true, hasTimeComponent: true)
     }
 
@@ -423,7 +423,7 @@ enum NaturalDateParser {
         var dc = DateComponents()
         dc.hour = hour
         dc.minute = minute
-        let d = cal.date(byAdding: dc, to: day)
+        let d = cal.date(byAdding: dc, to: cal.startOfDay(for: day))
         return NaturalDateParseResult(date: d, matchedSubstring: nil, hasDateComponent: true, hasTimeComponent: true)
     }
 
@@ -434,7 +434,7 @@ enum NaturalDateParser {
         var dc = DateComponents()
         dc.hour = hour
         dc.minute = minute
-        let d = cal.date(byAdding: dc, to: day)
+        let d = cal.date(byAdding: dc, to: cal.startOfDay(for: day))
         return NaturalDateParseResult(date: d, matchedSubstring: nil, hasDateComponent: true, hasTimeComponent: true)
     }
 
@@ -445,7 +445,7 @@ enum NaturalDateParser {
         var dc = DateComponents()
         dc.hour = hour
         dc.minute = minute
-        let d = cal.date(byAdding: dc, to: day)
+        let d = cal.date(byAdding: dc, to: cal.startOfDay(for: day))
         return NaturalDateParseResult(date: d, matchedSubstring: nil, hasDateComponent: true, hasTimeComponent: true)
     }
 
@@ -456,7 +456,7 @@ enum NaturalDateParser {
         var dc = DateComponents()
         dc.hour = hour
         dc.minute = minute
-        let d = cal.date(byAdding: dc, to: day)
+        let d = cal.date(byAdding: dc, to: cal.startOfDay(for: day))
         return NaturalDateParseResult(date: d, matchedSubstring: nil, hasDateComponent: true, hasTimeComponent: true)
     }
 
@@ -495,7 +495,7 @@ enum NaturalDateParser {
         var dc = DateComponents()
         dc.hour = 17
         dc.minute = 0
-        let d = cal.date(byAdding: dc, to: lastDay)
+        let d = cal.date(byAdding: dc, to: cal.startOfDay(for: lastDay))
         return NaturalDateParseResult(date: d, matchedSubstring: nil, hasDateComponent: true, hasTimeComponent: true)
     }
 

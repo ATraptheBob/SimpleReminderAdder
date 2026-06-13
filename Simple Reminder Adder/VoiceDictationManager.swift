@@ -3,10 +3,12 @@ import Speech
 import AVFoundation
 import Accelerate
 internal import Combine
+import os
 
 /// Manages live on-device speech recognition for the quick-add input.
 /// Exposes `isListening` and `transcript` for SwiftUI observation.
 final class VoiceDictationManager: ObservableObject {
+    private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "SimpleReminderAdder", category: "VoiceDictationManager")
     @Published private(set) var isListening = false
     @Published private(set) var transcript  = ""
     @Published var liveAmplitude: Float = 0.0
@@ -24,8 +26,12 @@ final class VoiceDictationManager: ObservableObject {
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var currentSessionID = UUID()
 
-    // Reusable buffer to prevent heap allocations on the audio thread
-    private var floatBuffer = [Float]()
+    // MARK: - Test Injections
+    var speechAuthorizationStatus = { SFSpeechRecognizer.authorizationStatus() }
+    var requestSpeechAuthorization: (@escaping (SFSpeechRecognizer.AuthorizationStatus) -> Void) -> Void = { SFSpeechRecognizer.requestAuthorization($0) }
+    var micAuthorizationStatus = { AVCaptureDevice.authorizationStatus(for: .audio) }
+    var requestMicAccess: (@escaping (Bool) -> Void) -> Void = { AVCaptureDevice.requestAccess(for: .audio, completionHandler: $0) }
+    var testDidBeginSession: ((String) -> Void)?
 
     // MARK: - Public API
 
@@ -37,19 +43,19 @@ final class VoiceDictationManager: ObservableObject {
         guard !isListening else { return }
 
         // Check Speech Recognition authorization
-        let speechStatus = SFSpeechRecognizer.authorizationStatus()
+        let speechStatus = speechAuthorizationStatus()
         
         // On macOS, we must also explicitly check and request microphone permissions via AVCaptureDevice
-        let micStatus = AVCaptureDevice.authorizationStatus(for: .audio)
+        let micStatus = micAuthorizationStatus()
 
         if speechStatus == .notDetermined || micStatus == .notDetermined {
-            SFSpeechRecognizer.requestAuthorization { [weak self] status in
-                AVCaptureDevice.requestAccess(for: .audio) { micGranted in
+            requestSpeechAuthorization { [weak self] status in
+                self?.requestMicAccess { micGranted in
                     DispatchQueue.main.async {
                         if status == .authorized && micGranted {
                             self?.beginSession(prefix: prefix)
                         } else {
-                            print("Voice dictation requires both Speech Recognition and Microphone permissions.")
+                            self?.logger.error("Voice dictation requires both Speech Recognition and Microphone permissions.")
                         }
                     }
                 }
@@ -60,7 +66,7 @@ final class VoiceDictationManager: ObservableObject {
         if speechStatus == .authorized && micStatus == .authorized {
             beginSession(prefix: prefix)
         } else {
-            print("Voice dictation requires both Speech Recognition and Microphone permissions.")
+            logger.error("Voice dictation requires both Speech Recognition and Microphone permissions.")
         }
     }
 
@@ -100,6 +106,11 @@ final class VoiceDictationManager: ObservableObject {
     private func beginSession(prefix: String) {
         isListening = true
         
+        if let hook = testDidBeginSession {
+            hook(prefix)
+            return
+        }
+
         // Setup recognition request and tap (if needed) before starting the engine
         startRecognitionTask(prefix: prefix, installTap: !audioEngine.isRunning)
         
