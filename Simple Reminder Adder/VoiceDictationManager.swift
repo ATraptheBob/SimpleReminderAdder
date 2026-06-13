@@ -3,6 +3,9 @@ import Speech
 import AVFoundation
 import Accelerate
 internal import Combine
+import OSLog
+
+private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "com.simplereminderadder", category: "VoiceDictationManager")
 
 /// Manages live on-device speech recognition for the quick-add input.
 /// Exposes `isListening` and `transcript` for SwiftUI observation.
@@ -46,7 +49,7 @@ final class VoiceDictationManager: ObservableObject {
                         if status == .authorized && micGranted {
                             self?.beginSession(prefix: prefix)
                         } else {
-                            print("Voice dictation requires both Speech Recognition and Microphone permissions.")
+                            logger.error("Voice dictation requires both Speech Recognition and Microphone permissions.")
                         }
                     }
                 }
@@ -57,7 +60,7 @@ final class VoiceDictationManager: ObservableObject {
         if speechStatus == .authorized && micStatus == .authorized {
             beginSession(prefix: prefix)
         } else {
-            print("Voice dictation requires both Speech Recognition and Microphone permissions.")
+            logger.error("Voice dictation requires both Speech Recognition and Microphone permissions.")
         }
     }
 
