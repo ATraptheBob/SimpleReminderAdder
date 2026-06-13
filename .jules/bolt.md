@@ -10,3 +10,6 @@
 ## 2024-11-20 - Manual scalar math on realtime audio threads
 **Learning:** Calculating statistics like Root Mean Square (RMS) using manual `for` loops in Swift on a realtime audio thread introduces unnecessary latency due to scalar computation over large arrays.
 **Action:** Replace manual loops over audio buffers (like `floatChannelData`) with vectorized `Accelerate` functions (such as `vDSP_rmsqv`) to drastically reduce CPU overhead during realtime processing.
+## 2026-06-13 - Avoid double-dispatch on the Main thread
+**Learning:** Wrapping a `continuation.resume` call in `DispatchQueue.main.async` when the continuation will already naturally resume onto the `@MainActor` causes an unnecessary double-dispatch, leading to delayed execution and potential frame drops.
+**Action:** Resume continuations directly if the caller handles actor context, or ensure you only explicitly dispatch to the main queue when strictly necessary, to avoid redundant scheduling overhead.
