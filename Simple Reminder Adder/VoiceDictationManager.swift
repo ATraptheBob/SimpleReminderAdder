@@ -24,6 +24,13 @@ final class VoiceDictationManager: ObservableObject {
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var currentSessionID = UUID()
 
+    // MARK: - Test Injections
+    var speechAuthorizationStatus = { SFSpeechRecognizer.authorizationStatus() }
+    var requestSpeechAuthorization: (@escaping (SFSpeechRecognizer.AuthorizationStatus) -> Void) -> Void = { SFSpeechRecognizer.requestAuthorization($0) }
+    var micAuthorizationStatus = { AVCaptureDevice.authorizationStatus(for: .audio) }
+    var requestMicAccess: (@escaping (Bool) -> Void) -> Void = { AVCaptureDevice.requestAccess(for: .audio, completionHandler: $0) }
+    var testDidBeginSession: ((String) -> Void)?
+
     // MARK: - Public API
 
     func toggle(prefix: String = "") {
@@ -34,14 +41,14 @@ final class VoiceDictationManager: ObservableObject {
         guard !isListening else { return }
 
         // Check Speech Recognition authorization
-        let speechStatus = SFSpeechRecognizer.authorizationStatus()
+        let speechStatus = speechAuthorizationStatus()
         
         // On macOS, we must also explicitly check and request microphone permissions via AVCaptureDevice
-        let micStatus = AVCaptureDevice.authorizationStatus(for: .audio)
+        let micStatus = micAuthorizationStatus()
 
         if speechStatus == .notDetermined || micStatus == .notDetermined {
-            SFSpeechRecognizer.requestAuthorization { [weak self] status in
-                AVCaptureDevice.requestAccess(for: .audio) { micGranted in
+            requestSpeechAuthorization { [weak self] status in
+                self?.requestMicAccess { micGranted in
                     DispatchQueue.main.async {
                         if status == .authorized && micGranted {
                             self?.beginSession(prefix: prefix)
@@ -97,6 +104,11 @@ final class VoiceDictationManager: ObservableObject {
     private func beginSession(prefix: String) {
         isListening = true
         
+        if let hook = testDidBeginSession {
+            hook(prefix)
+            return
+        }
+
         // Setup recognition request and tap (if needed) before starting the engine
         startRecognitionTask(prefix: prefix, installTap: !audioEngine.isRunning)
         
