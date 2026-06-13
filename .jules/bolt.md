@@ -10,3 +10,6 @@
 ## 2024-11-20 - Manual scalar math on realtime audio threads
 **Learning:** Calculating statistics like Root Mean Square (RMS) using manual `for` loops in Swift on a realtime audio thread introduces unnecessary latency due to scalar computation over large arrays.
 **Action:** Replace manual loops over audio buffers (like `floatChannelData`) with vectorized `Accelerate` functions (such as `vDSP_rmsqv`) to drastically reduce CPU overhead during realtime processing.
+## 2024-06-13 - O(N log N) to O(N) Calendar Date Parsing Optimization via Schwartzian Transform
+**Learning:** Calling computationally expensive functions, such as `Calendar.current.date(from:)`, directly inside a `.sorted` closure causes the expensive function to be evaluated O(N log N) times, which can create significant performance bottlenecks.
+**Action:** Apply the Decorate-Sort-Undecorate pattern (Schwartzian transform). Map the collection to `(element, computedProperty)` tuples before sorting, sort based on the cached `computedProperty`, and then map back or directly use the tuple to reduce the expensive calls to O(N).
