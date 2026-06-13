@@ -1,12 +1,3 @@
-## 2024-06-03 - Compiling Regular Expressions on Every Keystroke
-**Learning:** `NSRegularExpression` initializers are computationally expensive in Swift. Constructing 16 of them repeatedly inside `parseRecurrence` during every text change (each keystroke) was causing unnecessary CPU overhead.
-**Action:** Pre-compile static `NSRegularExpression` objects in properties so they are initialized exactly once and reused, achieving O(1) initialization cost instead of O(N).
-## 2024-10-24 - Pre-compiling Regexes with dynamic properties
-**Learning:** Even when regex patterns incorporate dynamic user properties (like list titles), initializing them repeatedly inside frequently invoked loops like `parseText()` during every keystroke causes significant performance lag due to regex compilation overhead.
-**Action:** When a regex pattern depends on dynamic data (like lists), compile the regular expressions once whenever that backing data changes (e.g. `onChange` or during fetch) and cache the resulting `NSRegularExpression` objects in state or local variables to reuse across subsequent operations.
-## 2024-10-25 - Caching NSDataDetector
-**Learning:** `NSDataDetector` is a subclass of `NSRegularExpression` and its initialization is equally computationally expensive. Initializing it inside a frequently invoked function (like a parser running on every keystroke) creates a significant CPU overhead.
-**Action:** Always cache instances of `NSDataDetector` as a thread-safe `static let` property if they are going to be used repeatedly.
-## 2024-11-20 - Manual scalar math on realtime audio threads
-**Learning:** Calculating statistics like Root Mean Square (RMS) using manual `for` loops in Swift on a realtime audio thread introduces unnecessary latency due to scalar computation over large arrays.
-**Action:** Replace manual loops over audio buffers (like `floatChannelData`) with vectorized `Accelerate` functions (such as `vDSP_rmsqv`) to drastically reduce CPU overhead during realtime processing.
+## 2024-06-13 - Optimize List Matching O(N*M) loop inside QuickAddView
+**Learning:** In Swift, calling `components(separatedBy:)` on a string inside a nested loop causes a huge amount of redundant memory allocations and computationally expensive string processing, especially when the outer loop iterates over a large collection (like multiple EKCalendars).
+**Action:** Hoist repetitive string manipulations outside of nested loops by pre-computing them into a collection (e.g., using `map`). This drastically lowers the algorithmic complexity.
