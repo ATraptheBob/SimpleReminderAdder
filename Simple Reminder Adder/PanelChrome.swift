@@ -125,4 +125,12 @@ enum PanelChrome {
     static let chipStrokeRest: Double = 0.28
     static let chipShadowGlow: Double = 0.22
     static let chipShadowRadius: CGFloat = 3
+
+    static func color(forPriority p: Int) -> Color {
+        switch p {
+        case 1:  return priorityHigh
+        case 5:  return priorityMed
+        default: return priorityLow
+        }
+    }
 }

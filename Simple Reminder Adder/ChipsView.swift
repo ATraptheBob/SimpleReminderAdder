@@ -183,17 +183,9 @@ struct ChipsView: View {
 
     private func chipColor(kind: ChipKind) -> Color {
         switch kind {
-        case .priority: return priorityColor(for: displayPriority)
+        case .priority: return PanelChrome.color(forPriority: displayPriority)
         case .date, .time, .recurrence: return PanelChrome.dateTime
         case .list, .location: return PanelChrome.listAccent
-        }
-    }
-
-    private func priorityColor(for p: Int) -> Color {
-        switch p {
-        case 1:  return PanelChrome.priorityHigh
-        case 5:  return PanelChrome.priorityMed
-        default: return PanelChrome.priorityLow
         }
     }
 }
