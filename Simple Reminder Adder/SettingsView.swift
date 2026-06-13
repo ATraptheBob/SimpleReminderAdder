@@ -1,6 +1,9 @@
 import SwiftUI
 import KeyboardShortcuts
 import ServiceManagement
+import OSLog
+
+private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "com.simplereminderadder", category: "SettingsView")
 
 struct SettingsView: View {
     @AppStorage("appTheme") private var selectedTheme: AppTheme = .system
@@ -100,7 +103,7 @@ struct SettingsView: View {
                         try SMAppService.mainApp.unregister()
                     }
                 } catch {
-                    print("Failed to toggle launch at login: \(error)")
+                    logger.error("Failed to toggle launch at login: \(error.localizedDescription)")
                 }
             }
 
