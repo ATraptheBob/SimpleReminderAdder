@@ -1,6 +1,7 @@
 import Foundation
 import Speech
 import AVFoundation
+import Accelerate
 internal import Combine
 
 /// Manages live on-device speech recognition for the quick-add input.
@@ -141,27 +142,30 @@ final class VoiceDictationManager: ObservableObject {
             
             // Calculate Root Mean Square (RMS) of buffer for live visualization
             let frameCount = Int(buffer.frameLength)
-            var sum: Float = 0.0
+            var rms: Float = 0.0
+
             if let channelData = buffer.floatChannelData?[0] {
-                for i in 0..<frameCount {
-                    let sample = channelData[i]
-                    sum += sample * sample
-                }
-            } else if let channelData = buffer.int16ChannelData?[0] {
-                for i in 0..<frameCount {
-                    let sample = Float(channelData[i]) / 32768.0
-                    sum += sample * sample
-                }
-            } else if let channelData = buffer.int32ChannelData?[0] {
-                for i in 0..<frameCount {
-                    let sample = Float(channelData[i]) / 2147483648.0
-                    sum += sample * sample
-                }
+                // ⚡ Bolt: Use Accelerate for vectorized RMS calculation
+                // replacing manual looping which is slow on audio thread
+                vDSP_rmsqv(channelData, 1, &rms, vDSP_Length(frameCount))
             } else {
-                sum = Float.random(in: 0.01...0.05) * Float(frameCount)
+                var sum: Float = 0.0
+                if let channelData = buffer.int16ChannelData?[0] {
+                    for i in 0..<frameCount {
+                        let sample = Float(channelData[i]) / 32768.0
+                        sum += sample * sample
+                    }
+                } else if let channelData = buffer.int32ChannelData?[0] {
+                    for i in 0..<frameCount {
+                        let sample = Float(channelData[i]) / 2147483648.0
+                        sum += sample * sample
+                    }
+                } else {
+                    sum = Float.random(in: 0.01...0.05) * Float(frameCount)
+                }
+                rms = sqrt(sum / Float(max(1, frameCount)))
             }
             
-            let rms = sqrt(sum / Float(max(1, frameCount)))
             DispatchQueue.main.async {
                 self.liveAmplitude = min(1.0, max(0.0, rms * 40.0))
             }
