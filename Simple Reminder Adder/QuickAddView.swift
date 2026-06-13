@@ -1089,9 +1089,9 @@ struct QuickAddView: View {
             // Now cycles: Low(9)→Medium(5)→High(1)→Low(9)
             let body = String(taskText.drop(while: { $0 == "!" })).trimmingCharacters(in: .whitespaces)
             switch parsedPriority {
-            case 9:  taskText = "!! " + body   // low  → medium
-            case 5:  taskText = "!!! " + body  // medium → high
-            default: taskText = "! " + body    // high  → low
+            case 9:  taskText = body.isEmpty ? "!!" : "!! " + body   // low  → medium
+            case 5:  taskText = body.isEmpty ? "!!!" : "!!! " + body // medium → high
+            default: taskText = body.isEmpty ? "!" : "! " + body     // high  → low
             }
         default: break
         }
