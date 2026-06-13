@@ -544,7 +544,7 @@ struct QuickAddView: View {
                 )
             }
         }
-        syncListPickerAfterTextChange(new, slashResult: currentSlash)
+        syncListPickerAfterTextChange(slashResult: currentSlash)
         parseText()
         updateSuggestion()
         postIfChipsChanged()
@@ -785,7 +785,7 @@ struct QuickAddView: View {
     }
 
     // BUG FIX: accept pre-computed slashResult to avoid re-calling listSlashQuery
-    private func syncListPickerAfterTextChange(_ newText: String, slashResult: (base: String, filter: String)?) {
+    private func syncListPickerAfterTextChange(slashResult: (base: String, filter: String)?) {
         if isSearchMode { listPickerIndex = 0; return }
         guard let slash = slashResult else { listPickerIndex = 0; return }
         let f = slash.filter
