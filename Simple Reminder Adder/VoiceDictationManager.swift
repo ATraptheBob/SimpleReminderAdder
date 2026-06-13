@@ -24,6 +24,9 @@ final class VoiceDictationManager: ObservableObject {
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var currentSessionID = UUID()
 
+    // Reusable buffer to prevent heap allocations on the audio thread
+    private var floatBuffer = [Float]()
+
     // MARK: - Public API
 
     func toggle(prefix: String = "") {
@@ -149,21 +152,26 @@ final class VoiceDictationManager: ObservableObject {
                 // replacing manual looping which is slow on audio thread
                 vDSP_rmsqv(channelData, 1, &rms, vDSP_Length(frameCount))
             } else {
-                var sum: Float = 0.0
                 if let channelData = buffer.int16ChannelData?[0] {
-                    for i in 0..<frameCount {
-                        let sample = Float(channelData[i]) / 32768.0
-                        sum += sample * sample
+                    if self.floatBuffer.count < frameCount {
+                        self.floatBuffer = [Float](repeating: 0.0, count: frameCount)
                     }
+                    vDSP_vflt16(channelData, 1, &self.floatBuffer, 1, vDSP_Length(frameCount))
+                    var divisor: Float = 32768.0
+                    vDSP_vsdiv(self.floatBuffer, 1, &divisor, &self.floatBuffer, 1, vDSP_Length(frameCount))
+                    vDSP_rmsqv(self.floatBuffer, 1, &rms, vDSP_Length(frameCount))
                 } else if let channelData = buffer.int32ChannelData?[0] {
-                    for i in 0..<frameCount {
-                        let sample = Float(channelData[i]) / 2147483648.0
-                        sum += sample * sample
+                    if self.floatBuffer.count < frameCount {
+                        self.floatBuffer = [Float](repeating: 0.0, count: frameCount)
                     }
+                    vDSP_vflt32(channelData, 1, &self.floatBuffer, 1, vDSP_Length(frameCount))
+                    var divisor: Float = 2147483648.0
+                    vDSP_vsdiv(self.floatBuffer, 1, &divisor, &self.floatBuffer, 1, vDSP_Length(frameCount))
+                    vDSP_rmsqv(self.floatBuffer, 1, &rms, vDSP_Length(frameCount))
                 } else {
-                    sum = Float.random(in: 0.01...0.05) * Float(frameCount)
+                    let sum = Float.random(in: 0.01...0.05) * Float(frameCount)
+                    rms = sqrt(sum / Float(max(1, frameCount)))
                 }
-                rms = sqrt(sum / Float(max(1, frameCount)))
             }
             
             DispatchQueue.main.async {
