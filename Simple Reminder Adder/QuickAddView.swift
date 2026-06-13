@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import EventKit
+import OSLog
 
 struct BubbleShape: Shape {
     var cornerRadius: CGFloat
@@ -1369,7 +1370,10 @@ struct QuickAddView: View {
                     self.lists = eventStore.calendars(for: .reminder)
                     self.precompileListRegexes(for: self.lists)
                 }
-            } catch { print("Permission error: Failed to acquire reminders access.") }
+            } catch {
+                // SECURITY ENHANCEMENT: Use OSLog instead of print to prevent data exposure in console output.
+                Logger(subsystem: Bundle.main.bundleIdentifier ?? "SimpleReminderAdder", category: "Permissions").error("Permission error: Failed to acquire reminders access.")
+            }
         }
     }
 
