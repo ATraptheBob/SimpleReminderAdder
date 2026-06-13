@@ -18,3 +18,7 @@
 **Vulnerability:** In `NaturalDateParser.swift`, a variable `lastWord` dynamically parsed from user input was inserted unescaped into a regular expression: `"(?i)\\b\(lastWord)\\s+\(escaped)"`.
 **Learning:** Although `lastWord` was constrained by an array check `["at", "on", ...]`, failing to escape dynamic input when interpolating it into regex strings is a bad practice. If the allowed list is ever modified to include regex-meaningful characters, it opens the app up to Regex Injection or ReDoS.
 **Prevention:** Always wrap dynamically interpolated strings inside regular expressions with `NSRegularExpression.escapedPattern(for:)`, regardless of current constraints.
+## $(date +%Y-%m-%d) - Replaced print with OSLog for error logging
+**Vulnerability:** Data exposure through console output. A `print` statement was used to log a "Permission error" in `QuickAddView.swift`.
+**Learning:** `print` output is often captured by system diagnostic tools or terminal sessions, which could inadvertently expose sensitive application state or user data.
+**Prevention:** Use `os.Logger` (`import OSLog`) instead of `print` for structured, secure logging in production macOS/iOS applications.
