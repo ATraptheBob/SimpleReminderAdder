@@ -247,7 +247,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let main     = panel.contentView
         let duration = 0.22
         let maxBlur: CGFloat = 14
-        let start    = CFAbsoluteTimeGetCurrent()
 
         // Start slightly scaled down for a subtle zoom-in effect
         main?.layer?.anchorPoint = CGPoint(x: 0.5, y: 0.5)
@@ -256,21 +255,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         main?.layer?.setAffineTransform(CGAffineTransform(scaleX: 0.97, y: 0.97))
 
-        func tick() {
-            guard token == self.panelMotionToken else { return }
-            let raw = min(1.0, (CFAbsoluteTimeGetCurrent() - start) / duration)
-            // Smooth ease-out quartic curve for premium feel
-            let u = 1 - CGFloat(raw)
-            let t = 1 - u * u * u * u
-            self.panel.alphaValue = CGFloat(t)
-            PanelMotionBlur.setRadius(maxBlur * (1 - t), on: main)
-            // Scale from 0.97 → 1.0
-            let scale = 0.97 + 0.03 * t
-            main?.layer?.setAffineTransform(CGAffineTransform(scaleX: scale, y: scale))
-            if raw < 1 {
-                DispatchQueue.main.async(execute: tick)
-            } else {
-                guard token == self.panelMotionToken else { return }
+        runAnimation(
+            duration: duration,
+            token: token,
+            onTick: { [weak self] raw in
+                guard let self = self else { return }
+                // Smooth ease-out quartic curve for premium feel
+                let t = self.easeOutQuartic(raw)
+                self.panel.alphaValue = t
+                PanelMotionBlur.setRadius(maxBlur * (1 - t), on: main)
+                // Scale from 0.97 → 1.0
+                let scale = 0.97 + 0.03 * t
+                main?.layer?.setAffineTransform(CGAffineTransform(scaleX: scale, y: scale))
+            },
+            onCancel: {
+                // Open cancel logic historically did nothing, but returning gracefully is handled.
+            },
+            onComplete: { [weak self] in
+                guard let self = self else { return }
                 self.panel.alphaValue = 1
                 PanelMotionBlur.setRadius(0, on: main)
                 main?.layer?.setAffineTransform(.identity)
@@ -282,12 +284,40 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     NotificationCenter.default.post(name: .toggleDictation, object: nil)
                 }
             }
-        }
-        tick()
+        )
     }
 
     private func easeOutCubic(_ t: CGFloat) -> CGFloat { let u = 1 - t; return 1 - u*u*u }
     private func easeInCubic(_ t: CGFloat) -> CGFloat  { return t*t*t }
+    private func easeOutQuartic(_ t: CGFloat) -> CGFloat { let u = 1 - t; return 1 - u*u*u*u }
+
+    private func runAnimation(
+        duration: TimeInterval,
+        token: UInt64,
+        onTick: @escaping (CGFloat) -> Void,
+        onCancel: @escaping () -> Void,
+        onComplete: @escaping () -> Void
+    ) {
+        let start = CFAbsoluteTimeGetCurrent()
+        func tick() {
+            guard token == self.panelMotionToken else {
+                onCancel()
+                return
+            }
+            let raw = min(1.0, (CFAbsoluteTimeGetCurrent() - start) / duration)
+            onTick(CGFloat(raw))
+            if raw < 1 {
+                DispatchQueue.main.async(execute: tick)
+            } else {
+                guard token == self.panelMotionToken else {
+                    onCancel()
+                    return
+                }
+                onComplete()
+            }
+        }
+        tick()
+    }
 
     private func installInputMonitors() {
         globalClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
@@ -428,7 +458,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let main     = panel.contentView
         let duration = 0.18
         let maxBlur: CGFloat = 16
-        let start    = CFAbsoluteTimeGetCurrent()
 
         // Prepare layer for scale transform
         main?.layer?.anchorPoint = CGPoint(x: 0.5, y: 0.5)
@@ -436,21 +465,26 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             main?.layer?.position = CGPoint(x: frame.midX, y: frame.midY)
         }
 
-        func tick() {
-            guard token == self.panelMotionToken else { PanelMotionBlur.setRadius(0, on: main); main?.layer?.setAffineTransform(.identity); return }
-            let raw = min(1.0, (CFAbsoluteTimeGetCurrent() - start) / duration)
-            // Ease-in quartic for snappy feel on close
-            let t   = CGFloat(raw * raw * raw)
-            self.panel.alphaValue       = 1 - CGFloat(t)
-            self.chipsPanel?.alphaValue = 1 - CGFloat(t)
-            PanelMotionBlur.setRadius(maxBlur * t, on: main)
-            // Scale from 1.0 → 0.96
-            let scale = 1.0 - 0.04 * t
-            main?.layer?.setAffineTransform(CGAffineTransform(scaleX: scale, y: scale))
-            if raw < 1 {
-                DispatchQueue.main.async(execute: tick)
-            } else {
-                guard token == self.panelMotionToken else { PanelMotionBlur.setRadius(0, on: main); main?.layer?.setAffineTransform(.identity); return }
+        runAnimation(
+            duration: duration,
+            token: token,
+            onTick: { [weak self] raw in
+                guard let self = self else { return }
+                // Ease-in quartic for snappy feel on close
+                let t = self.easeInCubic(raw) // Note: originally raw * raw * raw, which is cubic, despite the comment.
+                self.panel.alphaValue       = 1 - t
+                self.chipsPanel?.alphaValue = 1 - t
+                PanelMotionBlur.setRadius(maxBlur * t, on: main)
+                // Scale from 1.0 → 0.96
+                let scale = 1.0 - 0.04 * t
+                main?.layer?.setAffineTransform(CGAffineTransform(scaleX: scale, y: scale))
+            },
+            onCancel: {
+                PanelMotionBlur.setRadius(0, on: main)
+                main?.layer?.setAffineTransform(.identity)
+            },
+            onComplete: { [weak self] in
+                guard let self = self else { return }
                 if self.isClosingPanel {
                     self.isClosingPanel = false
                     PanelMotionBlur.setRadius(0, on: main)
@@ -463,8 +497,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     main?.layer?.setAffineTransform(.identity)
                 }
             }
-        }
-        tick()
+        )
     }
 
     private func finalizePanelHide() {
