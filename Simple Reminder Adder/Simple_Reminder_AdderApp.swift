@@ -290,118 +290,125 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func easeInCubic(_ t: CGFloat) -> CGFloat  { return t*t*t }
 
     private func installInputMonitors() {
-        globalClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
-            self?.hidePanel()
+        globalClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+            self?.handleGlobalClick(event: event)
         }
 
         localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self else { return event }
-            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            return self?.handleKeyDown(event: event) ?? event
+        }
+    }
 
-            // Esc
-            if event.keyCode == 53 {
-                if listPickerIsOpen {
-                    NotificationCenter.default.post(name: .listPickerCancel, object: nil)
-                    return nil
-                }
-                if searchModeIsOpen {
-                    NotificationCenter.default.post(name: .forceExitSearchMode, object: nil)
-                    return nil
-                }
-                NotificationCenter.default.post(name: NSNotification.Name("EscapePressed"), object: nil)
-                return nil
-            }
+    private func handleGlobalClick(event: NSEvent) {
+        hidePanel()
+    }
 
-            // ⌘F — search toggle
-            if flags.contains(.command), event.keyCode == 3 {
-                NotificationCenter.default.post(name: .searchHotkeyToggle, object: nil); return nil
-            }
+    private func handleKeyDown(event: NSEvent) -> NSEvent? {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
 
-            // ⌘, — settings
-            if flags.contains(.command), event.keyCode == 43 {
-                openSettingsWindow()
-                return nil
-            }
-            
-            // ⌘Z — undo last saved task
-            if flags.contains(.command), event.keyCode == 6 {
-                guard let rid = self.lastSavedReminderID else { return event }
-                NotificationCenter.default.post(
-                    name: NSNotification.Name("UndoLastTask"),
-                    object: nil,
-                    userInfo: ["reminderID": rid]
-                )
-                self.lastSavedReminderID = nil
-                return nil
-            }
-
-            // ⌘+<dictation hotkey> — toggle voice dictation (configurable)
-            let dictKey = UserDefaults.standard.string(forKey: "dictationHotkey") ?? "d"
-            if flags.contains(.command),
-               let chars = event.charactersIgnoringModifiers?.lowercased(),
-               chars == dictKey {
-                NotificationCenter.default.post(name: .toggleDictation, object: nil)
-                return nil
-            }
-
-            // Return / Enter
-            let isReturn = event.keyCode == 36 || event.keyCode == 76
-            if isReturn {
-                if listPickerIsOpen { NotificationCenter.default.post(name: .listPickerConfirm, object: nil); return nil }
-                if searchModeIsOpen {
-                    if flags.contains(.option) || flags.contains(.control) {
-                        NotificationCenter.default.post(name: .searchCompleteSelected, object: nil)
-                        return nil
-                    }
-                    NotificationCenter.default.post(name: .searchConfirm, object: nil)
-                    return nil
-                }
-                if flags.contains(.shift) { NotificationCenter.default.post(name: .quickAddShiftReturnSave, object: nil); return nil }
-                return event
-            }
-
-            // Shift + Space in search mode — mark selected as complete
-            if searchModeIsOpen, event.keyCode == 49, flags.contains(.shift) {
-                NotificationCenter.default.post(name: .searchCompleteSelected, object: nil)
-                return nil
-            }
-
-            // Shift + Delete / ⌘⌫ in search mode — delete selected reminder
-            if searchModeIsOpen, event.keyCode == 51, flags.contains(.shift) {
-                NotificationCenter.default.post(name: .searchDeleteSelected, object: nil)
-                return nil
-            }
-
-            // Arrow keys in list picker or search mode
+        // Esc
+        if event.keyCode == 53 {
             if listPickerIsOpen {
-                if event.keyCode == 125 { NotificationCenter.default.post(name: .listPickerNavigate, object: nil, userInfo: ["delta":  1]); return nil }
-                if event.keyCode == 126 { NotificationCenter.default.post(name: .listPickerNavigate, object: nil, userInfo: ["delta": -1]); return nil }
+                NotificationCenter.default.post(name: .listPickerCancel, object: nil)
+                return nil
             }
             if searchModeIsOpen {
-                if event.keyCode == 125 { NotificationCenter.default.post(name: .searchNavigate, object: nil, userInfo: ["delta":  1]); return nil }
-                if event.keyCode == 126 { NotificationCenter.default.post(name: .searchNavigate, object: nil, userInfo: ["delta": -1]); return nil }
-            }
-
-            // Up arrow recall (when not in list picker or search) — recall last reminder
-            if event.keyCode == 126, !listPickerIsOpen, !searchModeIsOpen {
-                NotificationCenter.default.post(name: .upArrowRecall, object: nil)
+                NotificationCenter.default.post(name: .forceExitSearchMode, object: nil)
                 return nil
             }
+            NotificationCenter.default.post(name: NSNotification.Name("EscapePressed"), object: nil)
+            return nil
+        }
 
-            // Tab
-            if event.keyCode == 48 {
-                if flags.contains(.command) || flags.contains(.control) || flags.contains(.option) { return event }
-                if listPickerIsOpen {
-                    let delta = flags.contains(.shift) ? -1 : 1
-                    NotificationCenter.default.post(name: .listPickerNavigate, object: nil, userInfo: ["delta": delta])
+        // ⌘F — search toggle
+        if flags.contains(.command), event.keyCode == 3 {
+            NotificationCenter.default.post(name: .searchHotkeyToggle, object: nil); return nil
+        }
+
+        // ⌘, — settings
+        if flags.contains(.command), event.keyCode == 43 {
+            openSettingsWindow()
+            return nil
+        }
+
+        // ⌘Z — undo last saved task
+        if flags.contains(.command), event.keyCode == 6 {
+            guard let rid = self.lastSavedReminderID else { return event }
+            NotificationCenter.default.post(
+                name: NSNotification.Name("UndoLastTask"),
+                object: nil,
+                userInfo: ["reminderID": rid]
+            )
+            self.lastSavedReminderID = nil
+            return nil
+        }
+
+        // ⌘+<dictation hotkey> — toggle voice dictation (configurable)
+        let dictKey = UserDefaults.standard.string(forKey: "dictationHotkey") ?? "d"
+        if flags.contains(.command),
+           let chars = event.charactersIgnoringModifiers?.lowercased(),
+           chars == dictKey {
+            NotificationCenter.default.post(name: .toggleDictation, object: nil)
+            return nil
+        }
+
+        // Return / Enter
+        let isReturn = event.keyCode == 36 || event.keyCode == 76
+        if isReturn {
+            if listPickerIsOpen { NotificationCenter.default.post(name: .listPickerConfirm, object: nil); return nil }
+            if searchModeIsOpen {
+                if flags.contains(.option) || flags.contains(.control) {
+                    NotificationCenter.default.post(name: .searchCompleteSelected, object: nil)
                     return nil
                 }
-                NotificationCenter.default.post(name: .quickAddTabAcceptSuggestion, object: nil)
+                NotificationCenter.default.post(name: .searchConfirm, object: nil)
                 return nil
             }
-
+            if flags.contains(.shift) { NotificationCenter.default.post(name: .quickAddShiftReturnSave, object: nil); return nil }
             return event
         }
+
+        // Shift + Space in search mode — mark selected as complete
+        if searchModeIsOpen, event.keyCode == 49, flags.contains(.shift) {
+            NotificationCenter.default.post(name: .searchCompleteSelected, object: nil)
+            return nil
+        }
+
+        // Shift + Delete / ⌘⌫ in search mode — delete selected reminder
+        if searchModeIsOpen, event.keyCode == 51, flags.contains(.shift) {
+            NotificationCenter.default.post(name: .searchDeleteSelected, object: nil)
+            return nil
+        }
+
+        // Arrow keys in list picker or search mode
+        if listPickerIsOpen {
+            if event.keyCode == 125 { NotificationCenter.default.post(name: .listPickerNavigate, object: nil, userInfo: ["delta":  1]); return nil }
+            if event.keyCode == 126 { NotificationCenter.default.post(name: .listPickerNavigate, object: nil, userInfo: ["delta": -1]); return nil }
+        }
+        if searchModeIsOpen {
+            if event.keyCode == 125 { NotificationCenter.default.post(name: .searchNavigate, object: nil, userInfo: ["delta":  1]); return nil }
+            if event.keyCode == 126 { NotificationCenter.default.post(name: .searchNavigate, object: nil, userInfo: ["delta": -1]); return nil }
+        }
+
+        // Up arrow recall (when not in list picker or search) — recall last reminder
+        if event.keyCode == 126, !listPickerIsOpen, !searchModeIsOpen {
+            NotificationCenter.default.post(name: .upArrowRecall, object: nil)
+            return nil
+        }
+
+        // Tab
+        if event.keyCode == 48 {
+            if flags.contains(.command) || flags.contains(.control) || flags.contains(.option) { return event }
+            if listPickerIsOpen {
+                let delta = flags.contains(.shift) ? -1 : 1
+                NotificationCenter.default.post(name: .listPickerNavigate, object: nil, userInfo: ["delta": delta])
+                return nil
+            }
+            NotificationCenter.default.post(name: .quickAddTabAcceptSuggestion, object: nil)
+            return nil
+        }
+
+        return event
     }
 
     func applicationDidResignActive(_ notification: Notification) {
