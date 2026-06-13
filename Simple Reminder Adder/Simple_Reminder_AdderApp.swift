@@ -572,17 +572,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func syncChipsPanel() {
         if searchModeIsOpen {
-            if let cp = chipsPanel, cp.isVisible {
-                NSAnimationContext.runAnimationGroup { ctx in
-                    ctx.duration = 0.08
-                    ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
-                    ctx.allowsImplicitAnimation = true
-                    cp.animator().alphaValue = 0
-                } completionHandler: {
-                    cp.alphaValue = 1
-                    cp.orderOut(nil)
-                }
-            }
+            hideChipsPanel(duration: 0.08)
             return
         }
 
@@ -592,22 +582,38 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let hasChips = chipsState.priority > 0 || chipsState.date != nil || chipsState.listName != nil || chipsState.recurrenceText != nil || chipsState.locationTitle != nil
 
         guard hasChips else {
-            if let cp = chipsPanel, cp.isVisible {
-                NSAnimationContext.runAnimationGroup { ctx in
-                    ctx.duration = 0.10
-                    ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
-                    ctx.allowsImplicitAnimation = true
-                    cp.animator().alphaValue = 0
-                } completionHandler: { [weak self] in
-                    guard let self, gen == self.chipsSyncGeneration else { return }
-                    cp.alphaValue = 1
-                    cp.orderOut(nil)
-                }
-            }
+            hideChipsPanel(duration: 0.10, generation: gen)
             return
         }
 
-        // Build panel lazily
+        ensureChipsPanelExists()
+
+        let chipsRoot = createChipsRootView()
+        updateChipsHostingView(with: chipsRoot)
+
+        let safeSize = calculateChipsPanelSize(for: chipsRoot)
+        let targetFrame = calculateChipsTargetFrame(safeSize: safeSize)
+
+        animateChipsPanel(to: targetFrame, safeSize: safeSize)
+    }
+
+    private func hideChipsPanel(duration: TimeInterval, generation: UInt64? = nil) {
+        if let cp = chipsPanel, cp.isVisible {
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = duration
+                ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
+                ctx.allowsImplicitAnimation = true
+                cp.animator().alphaValue = 0
+            } completionHandler: { [weak self] in
+                guard let self else { return }
+                if let gen = generation, gen != self.chipsSyncGeneration { return }
+                cp.alphaValue = 1
+                cp.orderOut(nil)
+            }
+        }
+    }
+
+    private func ensureChipsPanelExists() {
         if chipsPanel == nil {
             chipsPanel = FloatingPanel(
                 contentRect: .zero,
@@ -618,9 +624,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             chipsPanel?.level = .floating
             chipsPanel?.hasShadow = false
         }
+    }
 
-        // Build the SwiftUI root (AnyView so we can store the hosting view typed)
-        let chipsRoot = AnyView(
+    private func createChipsRootView() -> AnyView {
+        AnyView(
             ChipsView(
                 priority:     chipsState.priority,
                 date:         chipsState.date,
@@ -634,7 +641,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             )
             .environmentObject(chipsOverlayState)
         )
+    }
 
+    private func updateChipsHostingView(with chipsRoot: AnyView) {
         // BUG FIX: reuse the hosting view and update rootView so SwiftUI can animate
         // chip content changes in-place. Previously we created a 1600×400 view, measured
         // fittingSize, then set it as contentView without resizing — the panel clip could
@@ -646,7 +655,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             chipsHostingView?.rootView = chipsRoot
         }
+    }
 
+    private func calculateChipsPanelSize(for chipsRoot: AnyView) -> NSSize {
         // PERF: reuse cached probe view for measurement instead of allocating a new one.
         if chipsProbeView == nil {
             chipsProbeView = NSHostingView(rootView: chipsRoot)
@@ -657,17 +668,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         chipsProbeView?.layoutSubtreeIfNeeded()
         let fit = chipsProbeView?.fittingSize ?? NSSize(width: 100, height: 30)
         // Small padding so capsule shadows aren't clipped.
-        let safeSize = NSSize(width: ceil(fit.width) + 8, height: ceil(fit.height) + 14)
+        return NSSize(width: ceil(fit.width) + 8, height: ceil(fit.height) + 14)
+    }
 
+    private func calculateChipsTargetFrame(safeSize: NSSize) -> NSRect {
         // Position: centred below main panel
         let panelFrame  = panel.frame
         let gapBelow: CGFloat = 6
         let x = panelFrame.midX - safeSize.width  / 2
         let y = panelFrame.minY - safeSize.height - gapBelow
-        let targetFrame = NSRect(origin: NSPoint(x: x, y: y), size: safeSize)
+        return NSRect(origin: NSPoint(x: x, y: y), size: safeSize)
+    }
 
+    private func animateChipsPanel(to targetFrame: NSRect, safeSize: NSSize) {
         if chipsPanel?.isVisible == false {
             // Animate in: start at the panel midY, drop to resting position below.
+            let panelFrame  = panel.frame
             let anchorY   = panelFrame.minY + mainPanelCollapsedHeight / 2
             let startFrame = NSRect(
                 x: panelFrame.midX - safeSize.width / 2,
