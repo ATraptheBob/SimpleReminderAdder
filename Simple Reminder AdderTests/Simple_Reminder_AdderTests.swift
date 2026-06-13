@@ -18,21 +18,66 @@ final class Simple_Reminder_AdderTests: XCTestCase {
         // Put teardown code here. This method is called after the invocation of each test method in the class.
     }
 
-    func testExample() throws {
-        // This is an example of a functional test case.
-        // Use XCTAssert and related functions to verify your tests produce the correct results.
-        // Any test you write for XCTest can be annotated as throws and async.
-        // Mark your test throws to produce an unexpected failure when your test encounters an uncaught error.
-        // Mark your test async to allow awaiting for asynchronous code to complete. Check the results with assertions afterwards.
-        // XCTest Documentation
-        // https://developer.apple.com/documentation/xctest
+    func testParseRecurrence_Daily() throws {
+        let text = "Remind me to exercise every day"
+        let result = NaturalDateParser.parseRecurrence(text: text)
+        XCTAssertNotNil(result, "Expected to parse 'every day'")
+        XCTAssertEqual(result?.rule.frequency, .daily)
+        XCTAssertEqual(result?.matchedSubstring.lowercased(), "every day")
     }
 
-    func testPerformanceExample() throws {
-        // This is an example of a performance test case.
-        self.measure {
-            // Put the code you want to measure the time of here.
-        }
+    func testParseRecurrence_Weekly() throws {
+        let text = "Take out the trash every week"
+        let result = NaturalDateParser.parseRecurrence(text: text)
+        XCTAssertNotNil(result, "Expected to parse 'every week'")
+        XCTAssertEqual(result?.rule.frequency, .weekly)
+        XCTAssertEqual(result?.matchedSubstring.lowercased(), "every week")
+    }
+
+    func testParseRecurrence_Weekdays() throws {
+        let text = "Standup meeting every weekday"
+        let result = NaturalDateParser.parseRecurrence(text: text)
+        XCTAssertNotNil(result, "Expected to parse 'every weekday'")
+        XCTAssertEqual(result?.rule.frequency, .weekly)
+        XCTAssertEqual(result?.rule.daysOfTheWeek?.count, 5)
+        let days = result?.rule.daysOfTheWeek?.compactMap { $0.dayOfTheWeek }
+        XCTAssertTrue(days?.contains(.monday) ?? false)
+        XCTAssertTrue(days?.contains(.friday) ?? false)
+        XCTAssertFalse(days?.contains(.saturday) ?? true)
+    }
+
+    func testParseRecurrence_Weekends() throws {
+        let text = "Water the plants every weekend"
+        let result = NaturalDateParser.parseRecurrence(text: text)
+        XCTAssertNotNil(result, "Expected to parse 'every weekend'")
+        XCTAssertEqual(result?.rule.frequency, .weekly)
+        XCTAssertEqual(result?.rule.daysOfTheWeek?.count, 2)
+        let days = result?.rule.daysOfTheWeek?.compactMap { $0.dayOfTheWeek }
+        XCTAssertTrue(days?.contains(.saturday) ?? false)
+        XCTAssertTrue(days?.contains(.sunday) ?? false)
+    }
+
+    func testParseRecurrence_SpecificDay() throws {
+        let text = "Play tennis every Tuesday"
+        let result = NaturalDateParser.parseRecurrence(text: text)
+        XCTAssertNotNil(result, "Expected to parse 'every Tuesday'")
+        XCTAssertEqual(result?.rule.frequency, .weekly)
+        XCTAssertEqual(result?.rule.daysOfTheWeek?.count, 1)
+        XCTAssertEqual(result?.rule.daysOfTheWeek?.first?.dayOfTheWeek, .tuesday)
+    }
+
+    func testParseRecurrence_CaseInsensitivity() throws {
+        let text = "Buy groceries EVERY MONTH"
+        let result = NaturalDateParser.parseRecurrence(text: text)
+        XCTAssertNotNil(result, "Expected to parse 'EVERY MONTH'")
+        XCTAssertEqual(result?.rule.frequency, .monthly)
+        XCTAssertEqual(result?.matchedSubstring.lowercased(), "every month")
+    }
+
+    func testParseRecurrence_NoMatch() throws {
+        let text = "Just a normal reminder without recurrence"
+        let result = NaturalDateParser.parseRecurrence(text: text)
+        XCTAssertNil(result, "Expected no recurrence to be found")
     }
 
 }
