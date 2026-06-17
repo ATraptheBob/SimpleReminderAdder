@@ -3,13 +3,36 @@ import Speech
 import AVFoundation
 @testable import Simple_Reminder_Adder
 
+class MockAudioEngine: AudioEngineProtocol {
+    var isRunning: Bool = false
+    var didStop = false
+    var removedTapBus: AVAudioNodeBus?
+
+    func prepare() {}
+    func start() throws { isRunning = true }
+    func stop() {
+        isRunning = false
+        didStop = true
+    }
+    func removeTap(onBus bus: AVAudioNodeBus) {
+        removedTapBus = bus
+    }
+    func installTap(onBus bus: AVAudioNodeBus, bufferSize: AVAudioFrameCount, format: AVAudioFormat?, block: @escaping AVAudioNodeTapBlock) {}
+    func outputFormat(forBus bus: AVAudioNodeBus) -> AVAudioFormat {
+        return AVAudioFormat(standardFormatWithSampleRate: 44100.0, channels: 1)!
+    }
+}
+
 final class VoiceDictationManagerTests: XCTestCase {
 
     var manager: VoiceDictationManager!
+    var mockAudioEngine: MockAudioEngine!
 
     override func setUp() {
         super.setUp()
         manager = VoiceDictationManager()
+        mockAudioEngine = MockAudioEngine()
+        manager.audioEngine = mockAudioEngine
     }
 
     func testStartListening_whenAuthorized_beginsSession() {
@@ -88,5 +111,20 @@ final class VoiceDictationManagerTests: XCTestCase {
         manager.startListening(prefix: "test")
 
         XCTAssertFalse(manager.isListening)
+    }
+
+    func testCleanUp_stopsEngineAndResetsState() {
+        // Arrange
+        manager.liveAmplitude = 0.5
+        mockAudioEngine.isRunning = true
+
+        // Act
+        manager.cleanUp()
+
+        // Assert
+        XCTAssertTrue(mockAudioEngine.didStop)
+        XCTAssertEqual(mockAudioEngine.removedTapBus, 0)
+        XCTAssertFalse(manager.isListening)
+        XCTAssertEqual(manager.liveAmplitude, 0.0)
     }
 }

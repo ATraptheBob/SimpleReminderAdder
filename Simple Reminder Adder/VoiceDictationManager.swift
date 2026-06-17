@@ -5,6 +5,27 @@ import Accelerate
 internal import Combine
 import os
 
+protocol AudioEngineProtocol {
+    var isRunning: Bool { get }
+    func prepare()
+    func start() throws
+    func stop()
+    func removeTap(onBus bus: AVAudioNodeBus)
+    func installTap(onBus bus: AVAudioNodeBus, bufferSize: AVAudioFrameCount, format: AVAudioFormat?, block: @escaping AVAudioNodeTapBlock)
+    func outputFormat(forBus bus: AVAudioNodeBus) -> AVAudioFormat
+}
+
+final class DefaultAudioEngine: AudioEngineProtocol {
+    private let engine = AVAudioEngine()
+    var isRunning: Bool { engine.isRunning }
+    func prepare() { engine.prepare() }
+    func start() throws { try engine.start() }
+    func stop() { engine.stop() }
+    func removeTap(onBus bus: AVAudioNodeBus) { engine.inputNode.removeTap(onBus: bus) }
+    func installTap(onBus bus: AVAudioNodeBus, bufferSize: AVAudioFrameCount, format: AVAudioFormat?, block: @escaping AVAudioNodeTapBlock) { engine.inputNode.installTap(onBus: bus, bufferSize: bufferSize, format: format, block: block) }
+    func outputFormat(forBus bus: AVAudioNodeBus) -> AVAudioFormat { engine.inputNode.outputFormat(forBus: bus) }
+}
+
 /// Manages live on-device speech recognition for the quick-add input.
 /// Exposes `isListening` and `transcript` for SwiftUI observation.
 final class VoiceDictationManager: ObservableObject {
@@ -22,7 +43,7 @@ final class VoiceDictationManager: ObservableObject {
     // MARK: - Private
 
     private let speechRecognizer = SFSpeechRecognizer(locale: Locale.current)
-    private let audioEngine      = AVAudioEngine()
+    var audioEngine: AudioEngineProtocol = DefaultAudioEngine()
     private var recognitionTask: SFSpeechRecognitionTask?
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var currentSessionID = UUID()
@@ -74,7 +95,7 @@ final class VoiceDictationManager: ObservableObject {
     func stopListening() {
         guard isListening else { return }
         audioEngine.stop()
-        audioEngine.inputNode.removeTap(onBus: 0)
+        audioEngine.removeTap(onBus: 0)
         recognitionRequest?.endAudio()
         recognitionTask?.cancel()
         recognitionTask = nil
@@ -140,18 +161,16 @@ final class VoiceDictationManager: ObservableObject {
         }
         recognitionRequest = request
 
-        let inputNode = audioEngine.inputNode
-        
         if installTap {
-            let recordingFormat = inputNode.outputFormat(forBus: 0)
+            let recordingFormat = audioEngine.outputFormat(forBus: 0)
             
             guard recordingFormat.channelCount > 0, recordingFormat.sampleRate > 0 else {
                 // Fail safely if hardware reports invalid format to avoid crashes or -10877 errors
                 return
             }
 
-            inputNode.removeTap(onBus: 0) // Ensure no existing tap is conflicting
-            inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
+            audioEngine.removeTap(onBus: 0) // Ensure no existing tap is conflicting
+            audioEngine.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
                 guard let self else { return }
                 self.recognitionRequest?.append(buffer)
             
@@ -221,9 +240,9 @@ final class VoiceDictationManager: ObservableObject {
         }
     }
 
-    private func cleanUp() {
+    func cleanUp() {
         audioEngine.stop()
-        audioEngine.inputNode.removeTap(onBus: 0)
+        audioEngine.removeTap(onBus: 0)
         recognitionRequest = nil
         recognitionTask = nil
         isListening = false
