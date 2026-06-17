@@ -46,8 +46,17 @@ struct ContentView: View {
 
     private func deleteItems(offsets: IndexSet) {
         withAnimation {
-            for index in offsets {
-                modelContext.delete(items[index])
+            let timestamps = offsets.map { items[$0].timestamp }
+            do {
+                try modelContext.save()
+                try modelContext.delete(
+                    model: Item.self,
+                    where: #Predicate { item in
+                        timestamps.contains(item.timestamp)
+                    }
+                )
+            } catch {
+                print("Failed to batch delete items: \(error)")
             }
         }
     }
