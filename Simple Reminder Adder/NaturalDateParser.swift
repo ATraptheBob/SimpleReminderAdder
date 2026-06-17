@@ -551,11 +551,20 @@ enum NaturalDateParser {
         let wordsBefore = textBefore.components(separatedBy: .whitespaces)
         if let lastWord = wordsBefore.last(where: { !$0.isEmpty })?.lowercased(),
            ["at", "on", "by", "for", "due", "until", "before"].contains(lastWord) {
-            let escapedDate = NSRegularExpression.escapedPattern(for: finalDateString)
-            let escapedLastWord = NSRegularExpression.escapedPattern(for: lastWord)
-            let searchPattern = "(?i)\\b\(escapedLastWord)\\s+\(escapedDate)"
-            if let fullRange = text.range(of: searchPattern, options: .regularExpression) {
-                finalDateString = String(text[fullRange])
+            if let lastWordRange = textBefore.range(of: lastWord, options: [.backwards, .caseInsensitive]) {
+                let betweenString = textBefore[lastWordRange.upperBound..<baseRange.lowerBound]
+                if !betweenString.isEmpty && betweenString.allSatisfy({ $0.isWhitespace }) {
+                    let isWordBoundary: Bool
+                    if lastWordRange.lowerBound == text.startIndex {
+                        isWordBoundary = true
+                    } else {
+                        let prevChar = text[text.index(before: lastWordRange.lowerBound)]
+                        isWordBoundary = !prevChar.isLetter && !prevChar.isNumber && prevChar != "_"
+                    }
+                    if isWordBoundary {
+                        finalDateString = String(text[lastWordRange.lowerBound..<baseRange.upperBound])
+                    }
+                }
             }
         }
 
