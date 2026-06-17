@@ -566,7 +566,7 @@ enum NaturalDateParser {
         )
     }
 
-    private static func looksLikeBareClockTime(_ s: String) -> Bool {
+    static func looksLikeBareClockTime(_ s: String) -> Bool {
         let t = s.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if t.contains("tomorrow") || t.contains("today") || t.contains("next ") { return false }
         if t.contains("tonight") || t.contains("this evening") || t.contains("this morning") || t.contains("this afternoon") { return false }
