@@ -12,6 +12,7 @@ final class VoiceDictationManager: ObservableObject {
     @Published private(set) var isListening = false
     @Published private(set) var transcript  = ""
     @Published var liveAmplitude: Float = 0.0
+    private var floatBuffer: [Float] = []
     
     private var manualPrefix = ""
 
@@ -28,7 +29,7 @@ final class VoiceDictationManager: ObservableObject {
 
     // MARK: - Test Injections
     var speechAuthorizationStatus = { SFSpeechRecognizer.authorizationStatus() }
-    var requestSpeechAuthorization: (@escaping (SFSpeechRecognizer.AuthorizationStatus) -> Void) -> Void = { SFSpeechRecognizer.requestAuthorization($0) }
+    var requestSpeechAuthorization: (@escaping (SFSpeechRecognizerAuthorizationStatus) -> Void) -> Void = { SFSpeechRecognizer.requestAuthorization($0) }
     var micAuthorizationStatus = { AVCaptureDevice.authorizationStatus(for: .audio) }
     var requestMicAccess: (@escaping (Bool) -> Void) -> Void = { AVCaptureDevice.requestAccess(for: .audio, completionHandler: $0) }
     var testDidBeginSession: ((String) -> Void)?
@@ -49,7 +50,7 @@ final class VoiceDictationManager: ObservableObject {
         let micStatus = micAuthorizationStatus()
 
         if speechStatus == .notDetermined || micStatus == .notDetermined {
-            requestSpeechAuthorization { [weak self] status in
+            requestSpeechAuthorization { [weak self] (status: SFSpeechRecognizerAuthorizationStatus) in
                 self?.requestMicAccess { micGranted in
                     DispatchQueue.main.async {
                         if status == .authorized && micGranted {
