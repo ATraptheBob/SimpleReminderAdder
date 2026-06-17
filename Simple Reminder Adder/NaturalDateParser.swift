@@ -138,7 +138,7 @@ enum NaturalDateParser {
         pattern: #"(?i)\bevery\s+(day|week|month|year|weekday|weekend|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b"#
     )
     
-    private static let locationRegex = try! NSRegularExpression(
+    private static let locationRegex = try? NSRegularExpression(
         pattern: #"(?i)\b(?:when i |upon |on )?(arrive|arriving|leave|leaving)(?:\s+at|\s+from)?\s+(home|work|school|here|office)\b"#
     )
 
@@ -286,7 +286,7 @@ enum NaturalDateParser {
     static func parseLocation(text: String) -> (title: String, isArriving: Bool, matchedSubstring: String)? {
         let ns = text as NSString
         let full = NSRange(location: 0, length: ns.length)
-        guard let m = locationRegex.firstMatch(in: text, options: [], range: full),
+        guard let m = locationRegex?.firstMatch(in: text, options: [], range: full),
               let r = Range(m.range, in: text) else { return nil }
         
         let matchStr = String(text[r])
