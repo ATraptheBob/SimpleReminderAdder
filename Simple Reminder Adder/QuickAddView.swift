@@ -842,15 +842,23 @@ struct QuickAddView: View {
                 if let firstName = lists.first?.title { suggestion = firstName }
                 return
             }
-            for list in lists {
-                let listLower = list.title.lowercased()
-                for t in listTriggers {
-                    if lower.hasSuffix(t) { break }
-                    let possibleSuffix = lower.components(separatedBy: t).last ?? ""
-                    if !possibleSuffix.isEmpty && listLower.hasPrefix(possibleSuffix) && possibleSuffix != listLower {
-                        suggestion = String(list.title.dropFirst(possibleSuffix.count))
-                        return
-                    }
+        }
+
+        var validSuffixes: [(String, Int)] = []
+        for t in listTriggers {
+            if lower.hasSuffix(t) { break }
+            let possibleSuffix = lower.components(separatedBy: t).last ?? ""
+            if !possibleSuffix.isEmpty {
+                validSuffixes.append((possibleSuffix, possibleSuffix.count))
+            }
+        }
+
+        for list in lists {
+            let listLower = list.title.lowercased()
+            for (possibleSuffix, count) in validSuffixes {
+                if listLower.hasPrefix(possibleSuffix) && possibleSuffix != listLower {
+                    suggestion = String(list.title.dropFirst(count))
+                    return
                 }
             }
         }

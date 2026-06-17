@@ -13,3 +13,6 @@
 ## 2026-06-13 - Avoid double-dispatch on the Main thread
 **Learning:** Wrapping a `continuation.resume` call in `DispatchQueue.main.async` when the continuation will already naturally resume onto the `@MainActor` causes an unnecessary double-dispatch, leading to delayed execution and potential frame drops.
 **Action:** Resume continuations directly if the caller handles actor context, or ensure you only explicitly dispatch to the main queue when strictly necessary, to avoid redundant scheduling overhead.
+## 2024-06-17 - Precompute String Allocations
+**Learning:** Calling string allocation methods like `components(separatedBy:)` inside a tightly nested loop causes severe performance overhead and memory churn (O(N*M)).
+**Action:** Always precompute string allocations and caching values in an array/dictionary outside the inner loops to reduce computational complexity and allocations (O(1) relative to the inner loop).
