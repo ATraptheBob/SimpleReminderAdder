@@ -1351,7 +1351,11 @@ struct QuickAddView: View {
         guard (eventStore.calendarItem(withIdentifier: id) as? EKReminder) != nil else {
             NSSound.beep(); return
         }
-        NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Reminders.app"))
+        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.reminders") {
+            NSWorkspace.shared.open(url)
+        } else {
+            NSSound.beep()
+        }
     }
 
     // MARK: - Search keyboard navigation
