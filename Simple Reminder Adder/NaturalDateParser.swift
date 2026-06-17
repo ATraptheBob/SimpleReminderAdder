@@ -1,5 +1,6 @@
 import Foundation
 import EventKit
+import os
 
 struct NaturalDateParseResult: Equatable {
     var date: Date?
@@ -9,6 +10,17 @@ struct NaturalDateParseResult: Equatable {
 }
 
 enum NaturalDateParser {
+
+    private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "SimpleReminderAdder", category: "NaturalDateParser")
+
+    private static func createRegex(_ pattern: String, options: NSRegularExpression.Options = []) -> NSRegularExpression? {
+        do {
+            return try NSRegularExpression(pattern: pattern, options: options)
+        } catch {
+            logger.error("Failed to compile regex pattern: \(pattern). Error: \(error.localizedDescription)")
+            return nil
+        }
+    }
 
     // ────────────────────────────────────────────────────────────
     // MARK: - Configurable time-of-day defaults
@@ -46,14 +58,14 @@ enum NaturalDateParser {
     // ────────────────────────────────────────────────────────────
 
     private struct LexicalPattern {
-        let regex: NSRegularExpression
+        let regex: NSRegularExpression?
         let builder: (Date, Calendar) -> NaturalDateParseResult
     }
 
     // NOTE: Patterns that reference morning/afternoon/evening/night now call
     // timeForDayPart() at parse-time so they pick up user-customized values.
     private static let lexicalPatterns: [LexicalPattern] = {
-        func re(_ p: String) -> NSRegularExpression { try! NSRegularExpression(pattern: p) }
+        func re(_ p: String) -> NSRegularExpression? { createRegex(p) }
 
         return [
             LexicalPattern(regex: re(#"(?i)\bday after tomorrow\b"#))       { now, cal in
@@ -126,20 +138,20 @@ enum NaturalDateParser {
         ]
     }()
 
-    private static let nextWeekdayRegex = try! NSRegularExpression(
-        pattern: #"(?i)\bnext\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b"#
+    private static let nextWeekdayRegex = createRegex(
+        #"(?i)\bnext\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b"#
     )
-    private static let bareWeekdayRegex = try! NSRegularExpression(
-        pattern: #"(?i)(?<!next )\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b"#
+    private static let bareWeekdayRegex = createRegex(
+        #"(?i)(?<!next )\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b"#
     )
 
     // Recurrence & Location Regexes
-    private static let recurrenceRegex = try! NSRegularExpression(
-        pattern: #"(?i)\bevery\s+(day|week|month|year|weekday|weekend|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b"#
+    private static let recurrenceRegex = createRegex(
+        #"(?i)\bevery\s+(day|week|month|year|weekday|weekend|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b"#
     )
     
-    private static let locationRegex = try! NSRegularExpression(
-        pattern: #"(?i)\b(?:when i |upon |on )?(arrive|arriving|leave|leaving)(?:\s+at|\s+from)?\s+(home|work|school|here|office)\b"#
+    private static let locationRegex = createRegex(
+        #"(?i)\b(?:when i |upon |on )?(arrive|arriving|leave|leaving)(?:\s+at|\s+from)?\s+(home|work|school|here|office)\b"#
     )
 
     // ⚡ Bolt: Cache NSDataDetector since its initialization is very expensive
@@ -148,44 +160,44 @@ enum NaturalDateParser {
 
     // ⚡ Bolt: Pre-compile regexes for parseDetector and looksLikeBareClockTime
     // because constructing NSRegularExpression repeatedly is slow.
-    private static let bareClockTimeRegex = try! NSRegularExpression(
-        pattern: #"^\d{1,2}\s*(:\d{2})?\s*(am|pm|a\.m\.|p\.m\.)?$"#,
+    private static let bareClockTimeRegex = createRegex(
+        #"^\d{1,2}\s*(:\d{2})?\s*(am|pm|a\.m\.|p\.m\.)?$"#,
         options: [.caseInsensitive]
     )
-    private static let timeWithPeriodRegex = try! NSRegularExpression(
-        pattern: #"\d{1,2}\s*(:\d{2})?\s*(am|pm|a\.m\.|p\.m\.)"#,
+    private static let timeWithPeriodRegex = createRegex(
+        #"\d{1,2}\s*(:\d{2})?\s*(am|pm|a\.m\.|p\.m\.)"#,
         options: [.caseInsensitive]
     )
-    private static let atSymbolTimeRegex = try! NSRegularExpression(
-        pattern: #"\b(at|@)\s*\d"#,
+    private static let atSymbolTimeRegex = createRegex(
+        #"\b(at|@)\s*\d"#,
         options: [.caseInsensitive]
     )
-    private static let monthsAndDaysShortRegex = try! NSRegularExpression(
-        pattern: #"mon|tue|wed|thu|fri|sat|sun|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec"#,
+    private static let monthsAndDaysShortRegex = createRegex(
+        #"mon|tue|wed|thu|fri|sat|sun|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec"#,
         options: []
     )
 
     // Regexes for hasExplicitCalendarDay
-    private static let weekdaysRegex = try! NSRegularExpression(
-        pattern: #"mon(day)?|tue(sday)?|wed(nesday)?|thu(rsday)?|fri(day)?|sat(urday)?|sun(day)?"#,
+    private static let weekdaysRegex = createRegex(
+        #"mon(day)?|tue(sday)?|wed(nesday)?|thu(rsday)?|fri(day)?|sat(urday)?|sun(day)?"#,
         options: []
     )
-    private static let dateNumericRegex = try! NSRegularExpression(
-        pattern: #"\d{1,2}[/\-]\d{1,2}([/\-]\d{2,4})?"#,
+    private static let dateNumericRegex = createRegex(
+        #"\d{1,2}[/\-]\d{1,2}([/\-]\d{2,4})?"#,
         options: []
     )
-    private static let monthsShortRegex = try! NSRegularExpression(
-        pattern: #"jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec"#,
+    private static let monthsShortRegex = createRegex(
+        #"jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec"#,
         options: []
     )
 
     // Relative-time patterns — pre-compiled
     private struct FuzzyPattern {
-        let regex: NSRegularExpression
+        let regex: NSRegularExpression?
         let offset: (Date, Calendar) -> Date?
     }
     private static let fuzzyPatterns: [FuzzyPattern] = {
-        func re(_ p: String) -> NSRegularExpression { try! NSRegularExpression(pattern: p) }
+        func re(_ p: String) -> NSRegularExpression? { createRegex(p) }
         return [
             FuzzyPattern(regex: re(#"(?i)\bin\s+a\s+couple\s+of\s+hours?\b"#)) { now, cal in cal.date(byAdding: .hour, value: 2, to: now) },
             FuzzyPattern(regex: re(#"(?i)\bin\s+a\s+few\s+hours?\b"#))         { now, cal in cal.date(byAdding: .hour, value: 3, to: now) },
@@ -193,8 +205,8 @@ enum NaturalDateParser {
             FuzzyPattern(regex: re(#"(?i)\bin\s+an?\s+hour\b"#))               { now, cal in cal.date(byAdding: .hour, value: 1, to: now) },
         ]
     }()
-    private static let numericRelativeRegex = try! NSRegularExpression(
-        pattern: #"(?i)\bin\s+(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s*(hours?|hrs?|h\b|minutes?|mins?|m\b|days?|d\b|weeks?|w\b|months?|years?|y\b)\b"#
+    private static let numericRelativeRegex = createRegex(
+        #"(?i)\bin\s+(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s*(hours?|hrs?|h\b|minutes?|mins?|m\b|days?|d\b|weeks?|w\b|months?|years?|y\b)\b"#
     )
 
     // ────────────────────────────────────────────────────────────
@@ -226,7 +238,7 @@ enum NaturalDateParser {
     static func parseRecurrence(text: String) -> (rule: EKRecurrenceRule, matchedSubstring: String)? {
         let ns = text as NSString
         let full = NSRange(location: 0, length: ns.length)
-        guard let m = recurrenceRegex.firstMatch(in: text, options: [], range: full),
+        guard let m = recurrenceRegex?.firstMatch(in: text, options: [], range: full),
               let r = Range(m.range, in: text) else { return nil }
         
         let matchStr = String(text[r])
@@ -286,7 +298,7 @@ enum NaturalDateParser {
     static func parseLocation(text: String) -> (title: String, isArriving: Bool, matchedSubstring: String)? {
         let ns = text as NSString
         let full = NSRange(location: 0, length: ns.length)
-        guard let m = locationRegex.firstMatch(in: text, options: [], range: full),
+        guard let m = locationRegex?.firstMatch(in: text, options: [], range: full),
               let r = Range(m.range, in: text) else { return nil }
         
         let matchStr = String(text[r])
@@ -322,12 +334,12 @@ enum NaturalDateParser {
 
         // Iterate pre-compiled patterns (no regex compilation per call)
         for entry in lexicalPatterns {
-            guard let m = entry.regex.firstMatch(in: text, options: [], range: full),
+            guard let m = entry.regex?.firstMatch(in: text, options: [], range: full),
                   let r = Range(m.range, in: text) else { continue }
             take(r, entry.builder(now, cal))
         }
 
-        if let m = nextWeekdayRegex.firstMatch(in: text, options: [], range: full),
+        if let m = nextWeekdayRegex?.firstMatch(in: text, options: [], range: full),
            let r = Range(m.range, in: text) {
             let w = ns.substring(with: m.range(at: 1)).lowercased()
             if let wd = weekdayIndex(from: w),
@@ -336,7 +348,7 @@ enum NaturalDateParser {
             }
         }
 
-        if let m = bareWeekdayRegex.firstMatch(in: text, options: [], range: full),
+        if let m = bareWeekdayRegex?.firstMatch(in: text, options: [], range: full),
            let r = Range(m.range, in: text) {
             let w = ns.substring(with: m.range(at: 1)).lowercased()
             if let wd = weekdayIndex(from: w),
@@ -551,8 +563,8 @@ enum NaturalDateParser {
         let fullFinal = NSRange(location: 0, length: finalNs.length)
         let hasTime = match.timeZone != nil
             || hasNonZeroClock
-            || timeWithPeriodRegex.firstMatch(in: finalDateString, range: fullFinal) != nil
-            || atSymbolTimeRegex.firstMatch(in: finalDateString, range: fullFinal) != nil
+            || timeWithPeriodRegex?.firstMatch(in: finalDateString, range: fullFinal) != nil
+            || atSymbolTimeRegex?.firstMatch(in: finalDateString, range: fullFinal) != nil
 
         let explicitCal = hasExplicitCalendarDay(in: finalDateString)
         let hasDateComponent = explicitCal || !looksLikeBareClockTime(finalDateString)
@@ -574,8 +586,8 @@ enum NaturalDateParser {
 
         let ns = t as NSString
         let full = NSRange(location: 0, length: ns.length)
-        if monthsAndDaysShortRegex.firstMatch(in: t, range: full) != nil { return false }
-        return bareClockTimeRegex.firstMatch(in: t, range: full) != nil
+        if monthsAndDaysShortRegex?.firstMatch(in: t, range: full) != nil { return false }
+        return bareClockTimeRegex?.firstMatch(in: t, range: full) != nil
     }
 
     private static func hasExplicitCalendarDay(in s: String) -> Bool {
@@ -588,9 +600,9 @@ enum NaturalDateParser {
 
         let ns = t as NSString
         let full = NSRange(location: 0, length: ns.length)
-        if weekdaysRegex.firstMatch(in: t, range: full) != nil { return true }
-        if dateNumericRegex.firstMatch(in: t, range: full) != nil { return true }
-        if monthsShortRegex.firstMatch(in: t, range: full) != nil { return true }
+        if weekdaysRegex?.firstMatch(in: t, range: full) != nil { return true }
+        if dateNumericRegex?.firstMatch(in: t, range: full) != nil { return true }
+        if monthsShortRegex?.firstMatch(in: t, range: full) != nil { return true }
         return false
     }
 
@@ -601,14 +613,14 @@ enum NaturalDateParser {
 
         // Pre-compiled fuzzy patterns
         for entry in fuzzyPatterns {
-            guard let m = entry.regex.firstMatch(in: text, options: [], range: full),
+            guard let m = entry.regex?.firstMatch(in: text, options: [], range: full),
                   let r = Range(m.range, in: text),
                   let d = entry.offset(now, cal) else { continue }
             return NaturalDateParseResult(date: d, matchedSubstring: String(text[r]), hasDateComponent: false, hasTimeComponent: true)
         }
 
         // Pre-compiled numeric relative regex
-        guard let m = numericRelativeRegex.firstMatch(in: text, range: full),
+        guard let m = numericRelativeRegex?.firstMatch(in: text, range: full),
               let r = Range(m.range, in: text) else { return nil }
 
         guard m.numberOfRanges >= 3 else { return nil }
