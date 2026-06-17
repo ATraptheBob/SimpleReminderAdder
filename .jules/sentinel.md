@@ -18,3 +18,7 @@
 **Vulnerability:** In `NaturalDateParser.swift`, a variable `lastWord` dynamically parsed from user input was inserted unescaped into a regular expression: `"(?i)\\b\(lastWord)\\s+\(escaped)"`.
 **Learning:** Although `lastWord` was constrained by an array check `["at", "on", ...]`, failing to escape dynamic input when interpolating it into regex strings is a bad practice. If the allowed list is ever modified to include regex-meaningful characters, it opens the app up to Regex Injection or ReDoS.
 **Prevention:** Always wrap dynamically interpolated strings inside regular expressions with `NSRegularExpression.escapedPattern(for:)`, regardless of current constraints.
+## 2024-06-17 - Fix hardcoded application path vulnerability
+**Vulnerability:** Used explicit, hardcoded file path (`/System/Applications/Reminders.app`) to open an external application via `NSWorkspace`.
+**Learning:** Hardcoding system application paths can lead to failures or exploits if the OS directory structure changes or if a malicious binary is placed at that specific path in a compromised environment.
+**Prevention:** Always use dynamic bundle identifier resolution (e.g., `NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.reminders")`) to securely locate and launch external applications.
