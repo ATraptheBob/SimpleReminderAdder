@@ -1,8 +1,10 @@
 import SwiftUI
 import KeyboardShortcuts
 import ServiceManagement
+import os
 
 struct SettingsView: View {
+    private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "DefaultName", category: "SettingsView")
     @AppStorage("appTheme") private var selectedTheme: AppTheme = .system
     @AppStorage("keepPanelOpen") private var keepPanelOpen: Bool = false
     @State private var launchAtLogin: Bool = SMAppService.mainApp.status == .enabled
@@ -100,7 +102,7 @@ struct SettingsView: View {
                         try SMAppService.mainApp.unregister()
                     }
                 } catch {
-                    print("Failed to toggle launch at login: \(error)")
+                    logger.error("Failed to toggle launch at login: \(error)")
                 }
             }
 
