@@ -80,4 +80,68 @@ final class NaturalDateParserTests: XCTestCase {
         XCTAssertNil(NaturalDateParser.parseLocation(text: "arrive at the supermarket"))
         XCTAssertNil(NaturalDateParser.parseLocation(text: "just normal text"))
     }
+
+    func testParseLexicalPhrases() {
+        let cal = Calendar.current
+        var comps = DateComponents()
+        comps.year = 2024
+        comps.month = 5
+        comps.day = 1 // Wednesday
+        comps.hour = 12
+        comps.minute = 0
+        guard let refDate = cal.date(from: comps) else {
+            XCTFail("Could not construct reference date")
+            return
+        }
+
+        // test 'tomorrow'
+        if let res = NaturalDateParser.parseLexicalPhrases(text: "do this tomorrow", reference: refDate) {
+            let resComps = cal.dateComponents([.year, .month, .day, .hour], from: res.date!)
+            XCTAssertEqual(resComps.year, 2024)
+            XCTAssertEqual(resComps.month, 5)
+            XCTAssertEqual(resComps.day, 2) // Thursday
+            XCTAssertEqual(res.matchedSubstring, "tomorrow")
+            XCTAssertTrue(res.hasDateComponent)
+        } else {
+            XCTFail("Failed to parse 'tomorrow'")
+        }
+
+        // test 'next weekend'
+        if let res = NaturalDateParser.parseLexicalPhrases(text: "plan trip next weekend", reference: refDate) {
+            let resComps = cal.dateComponents([.year, .month, .day, .hour], from: res.date!)
+            XCTAssertEqual(resComps.year, 2024)
+            XCTAssertEqual(resComps.month, 5)
+            XCTAssertEqual(resComps.day, 11) // Next Saturday
+            XCTAssertEqual(res.matchedSubstring, "next weekend")
+        } else {
+            XCTFail("Failed to parse 'next weekend'")
+        }
+
+        // test bare weekday 'friday'
+        if let res = NaturalDateParser.parseLexicalPhrases(text: "meeting on friday", reference: refDate) {
+            let resComps = cal.dateComponents([.year, .month, .day, .hour], from: res.date!)
+            XCTAssertEqual(resComps.year, 2024)
+            XCTAssertEqual(resComps.month, 5)
+            XCTAssertEqual(resComps.day, 3) // Friday this week
+            XCTAssertEqual(res.matchedSubstring, "friday")
+            XCTAssertTrue(res.hasDateComponent)
+            XCTAssertFalse(res.hasTimeComponent)
+        } else {
+            XCTFail("Failed to parse 'friday'")
+        }
+
+        // test 'next week'
+        if let res = NaturalDateParser.parseLexicalPhrases(text: "start next week", reference: refDate) {
+            let resComps = cal.dateComponents([.year, .month, .day, .hour], from: res.date!)
+            XCTAssertEqual(resComps.year, 2024)
+            XCTAssertEqual(resComps.month, 5)
+            XCTAssertEqual(resComps.day, 8) // Wed -> Wed
+            XCTAssertEqual(res.matchedSubstring, "next week")
+        } else {
+            XCTFail("Failed to parse 'next week'")
+        }
+
+        // test negative case
+        XCTAssertNil(NaturalDateParser.parseLexicalPhrases(text: "random gibberish without dates", reference: refDate))
+    }
 }

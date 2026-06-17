@@ -313,7 +313,7 @@ enum NaturalDateParser {
 
     // MARK: - Lexical phrases (tonight, eod, weekdays, …)
 
-    private static func parseLexicalPhrases(text: String, reference now: Date) -> NaturalDateParseResult? {
+    internal static func parseLexicalPhrases(text: String, reference now: Date) -> NaturalDateParseResult? {
         let cal = Calendar.current
         let ns = text as NSString
         let full = NSRange(location: 0, length: ns.length)
