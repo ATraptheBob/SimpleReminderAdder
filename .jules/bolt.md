@@ -1,18 +1,3 @@
-## 2024-06-03 - Compiling Regular Expressions on Every Keystroke
-**Learning:** `NSRegularExpression` initializers are computationally expensive in Swift. Constructing 16 of them repeatedly inside `parseRecurrence` during every text change (each keystroke) was causing unnecessary CPU overhead.
-**Action:** Pre-compile static `NSRegularExpression` objects in properties so they are initialized exactly once and reused, achieving O(1) initialization cost instead of O(N).
-## 2024-10-24 - Pre-compiling Regexes with dynamic properties
-**Learning:** Even when regex patterns incorporate dynamic user properties (like list titles), initializing them repeatedly inside frequently invoked loops like `parseText()` during every keystroke causes significant performance lag due to regex compilation overhead.
-**Action:** When a regex pattern depends on dynamic data (like lists), compile the regular expressions once whenever that backing data changes (e.g. `onChange` or during fetch) and cache the resulting `NSRegularExpression` objects in state or local variables to reuse across subsequent operations.
-## 2024-10-25 - Caching NSDataDetector
-**Learning:** `NSDataDetector` is a subclass of `NSRegularExpression` and its initialization is equally computationally expensive. Initializing it inside a frequently invoked function (like a parser running on every keystroke) creates a significant CPU overhead.
-**Action:** Always cache instances of `NSDataDetector` as a thread-safe `static let` property if they are going to be used repeatedly.
-## 2024-11-20 - Manual scalar math on realtime audio threads
-**Learning:** Calculating statistics like Root Mean Square (RMS) using manual `for` loops in Swift on a realtime audio thread introduces unnecessary latency due to scalar computation over large arrays.
-**Action:** Replace manual loops over audio buffers (like `floatChannelData`) with vectorized `Accelerate` functions (such as `vDSP_rmsqv`) to drastically reduce CPU overhead during realtime processing.
-## 2026-06-13 - Avoid double-dispatch on the Main thread
-**Learning:** Wrapping a `continuation.resume` call in `DispatchQueue.main.async` when the continuation will already naturally resume onto the `@MainActor` causes an unnecessary double-dispatch, leading to delayed execution and potential frame drops.
-**Action:** Resume continuations directly if the caller handles actor context, or ensure you only explicitly dispatch to the main queue when strictly necessary, to avoid redundant scheduling overhead.
-## 2024-06-17 - Precompute String Allocations
-**Learning:** Calling string allocation methods like `components(separatedBy:)` inside a tightly nested loop causes severe performance overhead and memory churn (O(N*M)).
-**Action:** Always precompute string allocations and caching values in an array/dictionary outside the inner loops to reduce computational complexity and allocations (O(1) relative to the inner loop).
+## 2024-06-18 - Replacing On-the-fly Regex Compilation with Native String APIs
+**Learning:** In Swift, compiling or evaluating regular expressions on-the-fly inside frequently called methods or loops (like real-time parsing) creates severe performance bottlenecks.
+**Action:** For simple suffix, prefix, or boundary matching, replace regex evaluations (such as `NSRegularExpression.escapedPattern` and `text.range(of: ..., options: .regularExpression)`) with highly optimized native String APIs like `.range(of: options: [.backwards, .caseInsensitive])` combined with direct character inspection to enforce boundaries and spacing.
