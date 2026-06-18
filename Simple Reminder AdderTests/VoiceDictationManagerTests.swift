@@ -100,6 +100,62 @@ final class VoiceDictationManagerTests: XCTestCase {
         XCTAssertFalse(manager.isListening)
     }
 
+    func testStartListening_whenNotDetermined_requestsAccess_andDoesNotBeginSessionIfMicDenied() {
+        manager.speechAuthorizationStatus = { .notDetermined }
+        manager.micAuthorizationStatus = { .notDetermined }
+
+        manager.requestSpeechAuthorization = { completion in
+            completion(.authorized)
+        }
+        manager.requestMicAccess = { completion in
+            completion(false)
+        }
+
+        manager.testDidBeginSession = { _ in
+            XCTFail("Session should not begin if mic authorization is denied")
+        }
+
+        manager.startListening(prefix: "test")
+
+        let expectation = self.expectation(description: "Wait for dispatch")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            expectation.fulfill()
+        }
+        waitForExpectations(timeout: 1.0, handler: nil)
+
+        XCTAssertFalse(manager.isListening)
+    }
+
+    func testStartListening_whenSpeechAuthorizedButMicDenied_doesNotBeginSession() {
+        manager.speechAuthorizationStatus = { .authorized }
+        manager.micAuthorizationStatus = { .denied }
+
+        manager.testDidBeginSession = { _ in
+            XCTFail("Session should not begin if mic is denied")
+        }
+
+        manager.startListening(prefix: "test")
+
+        XCTAssertFalse(manager.isListening)
+    }
+
+    func testStartListening_whenAlreadyListening_returnsEarly() {
+        manager.speechAuthorizationStatus = { .authorized }
+        manager.micAuthorizationStatus = { .authorized }
+
+        // Simulate already listening
+        manager.testDidBeginSession = { _ in }
+        manager.startListening(prefix: "first")
+
+        XCTAssertTrue(manager.isListening)
+
+        manager.testDidBeginSession = { _ in
+            XCTFail("Session should not begin again if already listening")
+        }
+
+        manager.startListening(prefix: "second")
+    }
+
     func testStartListening_whenDenied_doesNotBeginSession() {
         manager.speechAuthorizationStatus = { .denied }
         manager.micAuthorizationStatus = { .denied }
