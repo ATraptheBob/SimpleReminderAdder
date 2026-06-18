@@ -75,6 +75,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var toastHostingView: NSHostingView<AnyView>?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        setupPanel()
+        setupKeyboardShortcuts()
+        setupObservers()
+        showPanel()
+    }
+
+    private func setupPanel() {
         // FIX: Use .borderless to cleanly eliminate the invisible title bar that
         // causes safe area insets (text clipping). Unlike .fullSizeContentView alone,
         // .borderless is a valid mask and prevents constraint loop crashes during resize.
@@ -86,11 +93,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         panel?.hasShadow = false
 
         NSApp.setActivationPolicy(.accessory)
+    }
 
+    private func setupKeyboardShortcuts() {
         KeyboardShortcuts.onKeyDown(for: .togglePanel) { [weak self] in
             self?.togglePanel()
         }
+    }
 
+    private func setupObservers() {
         NotificationCenter.default.addObserver(
             forName: NSNotification.Name("ParsedStateChanged"),
             object: nil, queue: .main
@@ -199,8 +210,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self.isTabVisible = visible
             self.resizePanelForText(textWidth: self.currentTextWidth, oldIdleMode: self.isIdleMode, oldTabVisible: oldTabVisible)
         }
-
-        showPanel()
     }
 
     // MARK: - Panel show/hide
