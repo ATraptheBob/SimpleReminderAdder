@@ -939,14 +939,6 @@ struct QuickAddView: View {
 
     // MARK: - Styling
 
-    private func priorityColor() -> Color {
-        switch parsedPriority {
-        case 1:  return PanelChrome.priorityHigh
-        case 5:  return PanelChrome.priorityMed
-        default: return PanelChrome.priorityLow
-        }
-    }
-
     private func styledText(from text: String) -> AttributedString {
         if isSearchMode {
             var plain = AttributedString(text)
@@ -956,7 +948,7 @@ struct QuickAddView: View {
         var attr = AttributedString(text)
         attr.foregroundColor = .primary
         if let s = parsedPriorityString, let r = attr.range(of: s) {
-            attr[r].foregroundColor = priorityColor().opacity(0.45)
+            attr[r].foregroundColor = PanelChrome.color(forPriority: parsedPriority).opacity(0.45)
         }
         if let s = parsedDateString, let r = attr.range(of: s, options: .caseInsensitive) {
             attr[r].foregroundColor = PanelChrome.dateTime.opacity(0.45)
