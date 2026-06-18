@@ -16,7 +16,7 @@ struct Simple_Reminder_AdderApp: App {
 }
 
 class AppDelegate: NSObject, NSApplicationDelegate {
-    var panel: FloatingPanel!
+    var panel: FloatingPanel?
     var chipsPanel: FloatingPanel?
     var toastPanel: FloatingPanel?
     
@@ -82,8 +82,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             contentRect: NSRect(x: 0, y: 0, width: idleWidth, height: idleHeight + tabHeight),
             styleMask: [.borderless]
         )
-        panel.contentView = NSHostingView(rootView: QuickAddView())
-        panel.hasShadow = false
+        panel?.contentView = NSHostingView(rootView: QuickAddView())
+        panel?.hasShadow = false
 
         NSApp.setActivationPolicy(.accessory)
 
@@ -206,7 +206,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Panel show/hide
 
     func togglePanel() {
-        panel.isVisible ? hidePanel() : showPanel()
+        panel?.isVisible == true ? hidePanel() : showPanel()
     }
 
     func showPanel() {
@@ -227,15 +227,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let newInputBarH: CGFloat = self.isIdleMode ? idleHeight : mainPanelCollapsedHeight
             let centerY_in_window = newTabH + newInputBarH / 2.0
             
-            let x = sf.midX - panel.frame.width / 2
+            let x = sf.midX - (panel?.frame.width ?? 0) / 2
             let y = sf.midY - centerY_in_window
-            panel.setFrameOrigin(NSPoint(x: x, y: y))
+            panel?.setFrameOrigin(NSPoint(x: x, y: y))
         } else {
-            panel.center()
+            panel?.center()
         }
-        panel.makeKeyAndOrderFront(nil)
-        panel.alphaValue = 0
-        PanelMotionBlur.setRadius(12, on: panel.contentView)
+        panel?.makeKeyAndOrderFront(nil)
+        panel?.alphaValue = 0
+        PanelMotionBlur.setRadius(12, on: panel?.contentView)
 
         DispatchQueue.main.async { [weak self] in
             guard let self, openTok == self.panelMotionToken else { return }
@@ -244,7 +244,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func runPanelOpenMotion(token: UInt64) {
-        let main     = panel.contentView
+        let main     = panel?.contentView
         let duration = 0.22
         let maxBlur: CGFloat = 14
         let start    = CFAbsoluteTimeGetCurrent()
@@ -262,7 +262,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             // Smooth ease-out quartic curve for premium feel
             let u = 1 - CGFloat(raw)
             let t = 1 - u * u * u * u
-            self.panel.alphaValue = CGFloat(t)
+            self.panel?.alphaValue = CGFloat(t)
             PanelMotionBlur.setRadius(maxBlur * (1 - t), on: main)
             // Scale from 0.97 → 1.0
             let scale = 0.97 + 0.03 * t
@@ -271,7 +271,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 DispatchQueue.main.async(execute: tick)
             } else {
                 guard token == self.panelMotionToken else { return }
-                self.panel.alphaValue = 1
+                self.panel?.alphaValue = 1
                 PanelMotionBlur.setRadius(0, on: main)
                 main?.layer?.setAffineTransform(.identity)
                 self.installInputMonitors()
@@ -415,17 +415,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         searchModeIsOpen  = false
         NotificationCenter.default.post(name: NSNotification.Name("PanelDidClose"), object: nil)
 
-        if !panel.isVisible { finalizePanelHide(); return }
+        if panel?.isVisible != true { finalizePanelHide(); return }
 
         panelMotionToken += 1
         let closeTok = panelMotionToken
         isClosingPanel = true
-        panel.contentView?.wantsLayer = true
+        panel?.contentView?.wantsLayer = true
         runPanelCloseMotion(token: closeTok)
     }
 
     private func runPanelCloseMotion(token: UInt64) {
-        let main     = panel.contentView
+        let main     = panel?.contentView
         let duration = 0.18
         let maxBlur: CGFloat = 16
         let start    = CFAbsoluteTimeGetCurrent()
@@ -441,7 +441,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let raw = min(1.0, (CFAbsoluteTimeGetCurrent() - start) / duration)
             // Ease-in quartic for snappy feel on close
             let t   = CGFloat(raw * raw * raw)
-            self.panel.alphaValue       = 1 - CGFloat(t)
+            self.panel?.alphaValue       = 1 - CGFloat(t)
             self.chipsPanel?.alphaValue = 1 - CGFloat(t)
             PanelMotionBlur.setRadius(maxBlur * t, on: main)
             // Scale from 1.0 → 0.96
@@ -457,7 +457,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     main?.layer?.setAffineTransform(.identity)
                     self.finalizePanelHide()
                 } else {
-                    self.panel.alphaValue       = 1
+                    self.panel?.alphaValue       = 1
                     self.chipsPanel?.alphaValue = 1
                     PanelMotionBlur.setRadius(0, on: main)
                     main?.layer?.setAffineTransform(.identity)
@@ -469,15 +469,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func finalizePanelHide() {
         chipsOverlayState.priorityExpanded = false
-        PanelMotionBlur.setRadius(0, on: panel.contentView)
+        PanelMotionBlur.setRadius(0, on: panel?.contentView)
         if mainPanelUsesSearchExpansion {
             mainPanelUsesSearchExpansion = false
         }
         
         // Let QuickAddView maintain the idle mode state.
         // We do not force reset it here so that if the user re-opens with a draft, it doesn't clip.
-        panel.orderOut(nil)
-        panel.alphaValue = 1
+        panel?.orderOut(nil)
+        panel?.alphaValue = 1
         chipsPanel?.orderOut(nil)
         chipsPanel?.alphaValue = 1
         if let m = globalClickMonitor { NSEvent.removeMonitor(m); globalClickMonitor = nil }
@@ -486,7 +486,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func updatePanelFrame(targetW: CGFloat, targetH: CGFloat, oldIdleMode: Bool, oldTabVisible: Bool) {
-        var f = panel.frame
+        guard var f = panel?.frame else { return }
         guard abs(f.size.height - targetH) > 0.5 || abs(f.size.width - targetW) > 0.5 else {
             DispatchQueue.main.async { [weak self] in self?.syncChipsPanel() }
             return
@@ -512,7 +512,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             ctx.duration = 0.28
             ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.16, 1.0, 0.3, 1.0)
             ctx.allowsImplicitAnimation = true
-            panel.animator().setFrame(f, display: true)
+            panel?.animator().setFrame(f, display: true)
         } completionHandler: { [weak self] in
             self?.syncChipsPanel()
         }
@@ -660,7 +660,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let safeSize = NSSize(width: ceil(fit.width) + 8, height: ceil(fit.height) + 14)
 
         // Position: centred below main panel
-        let panelFrame  = panel.frame
+        guard let panelFrame = panel?.frame else { return }
         let gapBelow: CGFloat = 6
         let x = panelFrame.midX - safeSize.width  / 2
         let y = panelFrame.minY - safeSize.height - gapBelow
@@ -738,7 +738,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         toastDismissWorkItem?.cancel()
         toastPanel?.contentView = toastHostingView
 
-        guard let screen = panel.screen ?? NSScreen.main else { return }
+        guard let screen = panel?.screen ?? NSScreen.main else { return }
         let sf = screen.visibleFrame
         let x  = sf.midX - size.width / 2
         let y  = sf.maxY - size.height - 80
